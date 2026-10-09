@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 但聞人語（danwen）安裝腳本
 #
-# 用法：./install.sh [--with-whisper]
-#   --with-whisper  另外編譯 whisper.cpp（Vulkan）並下載模型，啟用 backend B
+# 用法：./install.sh [--with-whisper] [--with-extension]
+#   --with-whisper    另外編譯 whisper.cpp（Vulkan）並下載模型，啟用 backend B
+#   --with-extension  另外安裝 GNOME Shell extension（頂列圖示、選單、錄音提示），登出再登入後出現
 #
 # 每一項系統變更都記錄在 ~/.local/state/danwen/install-manifest，uninstall.sh 依此逐項還原。
 # 不會修改 fcitx5、IBus、im-config 設定或輸入法環境變數；安裝前後會比對並印出結果。
@@ -19,17 +20,19 @@ WHISPER_TAG=v1.9.5
 WHISPER_DIR="$DATA_DIR/whisper.cpp"
 WHISPER_MODEL="$CACHE_DIR/models/whisper-large-v3-turbo/ggml-large-v3-turbo-q5_0.bin"
 
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-info() { printf '    %s\n' "$*"; }
-warn() { printf '\033[33m警告：%s\033[0m\n' "$*" >&2; }
 die() { printf '\033[31m錯誤：%s\033[0m\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+# shellcheck source=scripts/common.sh
+source "$REPO/scripts/common.sh"
+
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 WITH_WHISPER=0
+WITH_EXTENSION=0
 for arg in "$@"; do
     case "$arg" in
         --with-whisper) WITH_WHISPER=1 ;;
+        --with-extension) WITH_EXTENSION=1 ;;
         -h | --help) usage 0 ;;
         *) warn "不認得的參數：$arg"; usage 1 ;;
     esac
@@ -43,17 +46,6 @@ record() {
 # 目前已安裝（狀態 ii）的套件清單，排序後供 comm 比對
 installed_packages() {
     dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | awk '$1 == "ii" {print $2}' | sort
-}
-
-# 輸入法相關檔案的雜湊，只讀不寫。cached_layouts 是 fcitx5 自己產生的快取，不列入。
-ime_snapshot() {
-    {
-        find "$HOME/.config/fcitx5" "$HOME/.config/environment.d" -type f \
-            ! -name cached_layouts -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
-        for f in "$HOME/.xinputrc" /etc/environment; do
-            if [ -f "$f" ]; then sha256sum "$f"; fi
-        done
-    } 2>/dev/null || true
 }
 
 # ---- 前置檢查 ----
@@ -166,7 +158,57 @@ if [ "$WITH_WHISPER" = 1 ]; then
     info "已安裝 danwen-whisper.service（不常駐，用到時才啟動）"
 fi
 
-# ---- 7. systemd 服務 ----
+# ---- 7. GNOME Shell extension（選用） ----
+NEED_SHELL_RELOAD=0
+if [ "$WITH_EXTENSION" = 1 ]; then
+    say "安裝 GNOME Shell extension"
+    EXT_SRC="$REPO/gnome-extension/$EXT_UUID"
+    SHELL_MAJOR="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+    SUPPORTED="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["shell-version"]))' "$EXT_SRC/metadata.json")"
+    if [ -z "$SHELL_MAJOR" ]; then
+        warn "找不到 GNOME Shell，略過 extension"
+    elif ! tr ' ' '\n' <<<"$SUPPORTED" | grep -qx "$SHELL_MAJOR"; then
+        warn "extension 目前只支援 GNOME $SUPPORTED，你的是 GNOME $SHELL_MAJOR，略過"
+    else
+        mkdir -p "$(dirname "$EXT_DIR")"
+        rm -rf "$EXT_DIR"
+        cp -r "$EXT_SRC" "$EXT_DIR"
+        record "extension=$EXT_DIR"
+        # 只動 danwen 自己這一項：加進啟用清單，並確保不在停用清單（停用清單優先）
+        if NEW="$(strv_edit add enabled-extensions "$EXT_UUID")"; then
+            gsettings set org.gnome.shell enabled-extensions "$NEW"
+        fi
+        if NEW="$(strv_edit remove disabled-extensions "$EXT_UUID")"; then
+            gsettings set org.gnome.shell disabled-extensions "$NEW"
+        fi
+        record "extension_enabled=$EXT_UUID"
+        if [ "$(gsettings get org.gnome.shell disable-user-extensions)" = true ]; then
+            warn "GNOME 目前停用了所有使用者 extension（disable-user-extensions），danwen 的 extension 不會出現"
+        fi
+        NEED_SHELL_RELOAD=1
+        info "已安裝到 $EXT_DIR 並加入啟用清單（Wayland 需登出再登入才會載入）"
+    fi
+fi
+
+# ---- 8. 手動執行的 danwen（例如 sg input -c "danwen -v run"）會與服務重複貼上 ----
+mapfile -t STRAY < <(stray_danwen_pids)
+if [ "${#STRAY[@]}" -gt 0 ]; then
+    say "發現手動執行的 danwen"
+    warn "它不是由服務啟動的；舊版沒有防重複機制，跟服務同時執行會把每句話貼上兩次"
+    ps -o pid,lstart,cmd -p "$(IFS=,; echo "${STRAY[*]}")" | sed 's/^/    /'
+    REPLY_STOP=n
+    if [ -t 0 ]; then
+        read -r -p "    要停掉它們嗎？[Y/n] " REPLY_STOP || REPLY_STOP=n
+    fi
+    # 沒有終端機可以詢問時（例如被其他程式呼叫）一律不停止
+    if [[ "${REPLY_STOP:-Y}" =~ ^[Yy] ]]; then
+        kill "${STRAY[@]}" && info "已停止"
+    else
+        info "保留；請記得自行停止"
+    fi
+fi
+
+# ---- 9. systemd 服務 ----
 say "安裝 systemd --user 服務"
 mkdir -p "$UNIT_DIR"
 sed "s|@DANWEN_BIN@|$DANWEN_BIN|" "$REPO/systemd/danwen.service" >"$UNIT_DIR/danwen.service"
@@ -182,7 +224,7 @@ else
     info "已設為登入後自動啟動（目前的登入工作階段還沒有 input 群組權限）"
 fi
 
-# ---- 8. 確認輸入法設定沒有被動到 ----
+# ---- 10. 確認輸入法設定沒有被動到 ----
 say "比對輸入法相關設定（fcitx5、environment.d、~/.xinputrc、/etc/environment）"
 IME_AFTER="$(ime_snapshot)"
 if [ "$IME_BEFORE" = "$IME_AFTER" ]; then
@@ -201,6 +243,8 @@ if [ "$NEED_RELOGIN" = 1 ]; then
         printf '\033[1;33m    請登出再登入（或重新開機），讓 input 群組生效，之後就會自動啟動。\033[0m\n'
     fi
     printf '    不想等的話，可先在終端機前景試用：sg input -c "%s -v run"\n' "$DANWEN_BIN"
+elif [ "$NEED_SHELL_RELOAD" = 1 ]; then
+    printf '\033[1;33m    請登出再登入（或重新開機），GNOME extension 才會出現在頂列。\033[0m\n'
 fi
 cat <<EOF
     使用：按住右 Ctrl 超過 0.3 秒開始錄音，放開後自動貼上

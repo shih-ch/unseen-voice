@@ -9,8 +9,9 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 ## 安裝
 
 ```bash
-./install.sh                  # 只裝 backend A（SenseVoice，CPU）
-./install.sh --with-whisper   # 另外編譯 whisper.cpp（Vulkan），啟用 backend B
+./install.sh                    # 只裝 backend A（SenseVoice，CPU）
+./install.sh --with-whisper     # 另外編譯 whisper.cpp（Vulkan），啟用 backend B
+./install.sh --with-extension   # 另外安裝 GNOME Shell extension（頂列圖示、選單、錄音提示）
 ```
 
 安裝腳本會：
@@ -19,6 +20,8 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 - 用 `uv tool` 安裝 `danwen` 指令、建立設定檔、下載模型、安裝 systemd --user 服務
 
 **不會**修改 fcitx5、IBus、im-config 設定或輸入法環境變數。安裝前後會比對這些檔案並印出結果。
+
+安裝時若發現手動執行的 danwen（例如 `sg input -c "danwen -v run"`），會問你要不要停掉，避免和服務同時執行而重複貼上。
 
 第一次安裝後請**登出再登入**，讓 input 群組生效。若帳號開了 linger（`loginctl show-user $USER -p Linger`），systemd --user 登出後不會重啟，需要**重新開機**。
 等不及的話可先前景試用：`sg input -c "danwen -v run"`。
@@ -141,6 +144,16 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 聽寫完成 錄音=10.21s ASR=0.281s 後處理=0.001s 貼上=0.062s 放開到貼上=0.402s 字數=48 backend=sensevoice
 ```
 
+## GNOME extension
+
+`./install.sh --with-extension` 安裝，登出再登入後出現在頂列：
+
+- 圖示：待命、錄音（紅）、辨識整理中（黃「…」）、danwen 未執行（灰）
+- 選單：開始／結束／取消長錄音、切換小紙條、最近 5 筆（點一下複製）、換小紙條重新整理最新一筆、開啟設定檔
+- 錄音時畫面上方中央的小提示：「● 錄音中 0:03」「● 長錄音 1:25 · 再按一下 右 Ctrl 結束，Esc 取消」「… 整理中」
+
+目前只宣告支援 GNOME 46；GNOME 升級後若不相容會自動停用，聽寫本身不受影響。
+
 ## D-Bus 介面
 
 常駐時在 session bus 提供 `io.github.danwen`（給 GNOME extension 用，也可自行呼叫），例如：
@@ -171,6 +184,7 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 | `/etc/udev/rules.d/70-danwen-uinput.rules` | 刪除 |
 | `uv tool install danwen` | `uv tool uninstall danwen` |
 | `danwen.service`、`danwen-whisper.service` | 停止、停用、刪除 |
+| GNOME extension：`~/.local/share/gnome-shell/extensions/danwen@danwen.github.io`，加入 enabled-extensions | 從 enabled／disabled-extensions 拿掉 danwen 這一項（執行中的 GNOME 立刻卸載）並刪除檔案；其他 extension 不受影響 |
 | 設定檔 `~/.config/danwen` | 詢問後刪除（預設保留，可能有你的替換字典） |
 | 模型 `~/.cache/danwen`、whisper.cpp `~/.local/share/danwen`、紀錄 `~/.local/state/danwen` | 刪除 |
 

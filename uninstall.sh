@@ -5,7 +5,7 @@
 #   -y         不逐項詢問：連同設定檔、install.sh 當初安裝的系統套件一起移除
 #   --dry-run  只列出會做哪些事，不做任何變更
 #
-# 依 ~/.local/state/danwen/install-manifest 逐項還原 install.sh（含 --with-whisper）做過的變更；
+# 依 ~/.local/state/danwen/install-manifest 逐項還原 install.sh（含 --with-whisper、--with-extension）做過的變更；
 # 只移除當初由 install.sh 新增的東西（例如原本就在 input 群組，就不會把你移出）。
 set -euo pipefail
 
@@ -16,10 +16,9 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/danwen"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 MANIFEST="$STATE_DIR/install-manifest"
 UDEV_RULE=/etc/udev/rules.d/70-danwen-uinput.rules
-
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-info() { printf '    %s\n' "$*"; }
-warn() { printf '\033[33m警告：%s\033[0m\n' "$*" >&2; }
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/common.sh
+source "$REPO/scripts/common.sh"
 
 YES=0
 DRY_RUN=0
@@ -59,21 +58,46 @@ manifest_values() {
     if [ -f "$MANIFEST" ]; then grep "^$1=" "$MANIFEST" | cut -d= -f2- || true; fi
 }
 
-# 與 install.sh 相同：輸入法相關檔案的雜湊，只讀不寫
-ime_snapshot() {
-    {
-        find "$HOME/.config/fcitx5" "$HOME/.config/environment.d" -type f \
-            ! -name cached_layouts -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
-        for f in "$HOME/.xinputrc" /etc/environment; do
-            if [ -f "$f" ]; then sha256sum "$f"; fi
-        done
-    } 2>/dev/null || true
-}
-
 [ "$DRY_RUN" = 0 ] || printf '\033[1;33m（dry-run：只列出動作，不做任何變更）\033[0m\n'
 IME_BEFORE="$(ime_snapshot)"
 [ -f "$MANIFEST" ] || warn "找不到安裝紀錄 $MANIFEST，只移除已知的 danwen 檔案；群組與系統套件不會變動"
 NEED_RELOGIN=0
+
+# ---- 0. GNOME Shell extension：從啟用／停用清單拿掉（執行中的 GNOME 會立刻卸載），再刪檔 ----
+say "GNOME Shell extension"
+EXT_DIRS=("$EXT_DIR")
+# 安裝紀錄裡的位置（以防安裝時的 XDG 路徑不同）；只接受 danwen 自己的 extension 目錄
+while read -r d; do
+    case "$d" in */gnome-shell/extensions/"$EXT_UUID") EXT_DIRS+=("$d") ;; esac
+done < <(manifest_values extension)
+EXT_FOUND=0
+if command -v gsettings >/dev/null; then
+    for key in enabled-extensions disabled-extensions; do
+        if NEW="$(strv_edit remove "$key" "$EXT_UUID")"; then
+            run gsettings set org.gnome.shell "$key" "$NEW"
+            info "從 $key 移除 $EXT_UUID"
+            EXT_FOUND=1
+        fi
+    done
+fi
+for d in "${EXT_DIRS[@]}"; do
+    if [ -d "$d" ]; then
+        run rm -rf "$d"
+        info "刪除 $d"
+        EXT_FOUND=1
+    fi
+done
+[ "$EXT_FOUND" = 1 ] || info "沒有安裝"
+
+# ---- 手動執行的 danwen（例如 sg input -c "danwen -v run"） ----
+mapfile -t STRAY < <(stray_danwen_pids)
+if [ "${#STRAY[@]}" -gt 0 ]; then
+    say "手動執行的 danwen"
+    ps -o pid,lstart,cmd -p "$(IFS=,; echo "${STRAY[*]}")" | sed 's/^/    /'
+    if ask "要停掉它們嗎？[Y/n]" Y; then
+        run kill "${STRAY[@]}" || true
+    fi
+fi
 
 # ---- 1. 停止並移除服務（含 backend B 的 danwen-whisper.service） ----
 say "停止並移除 systemd --user 服務"

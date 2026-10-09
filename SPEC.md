@@ -116,7 +116,12 @@
        （Shell 結束或 extension 停用時名稱自動釋放）
      - D-Bus 新增 Hotkey 屬性，提示顯示實際的熱鍵名稱
      - Esc／熱鍵由 danwen 讀鍵盤處理，巢狀測試裡的假 danwen 不讀鍵盤，因此只能測選單操作
-   - 5d 安裝與移除
+   - ✅ 5d 安裝與移除：`install.sh --with-extension`
+     - 複製到 `~/.local/share/gnome-shell/extensions/`，只把 danwen 加進 enabled-extensions、從 disabled-extensions 拿掉
+       （GNOME 46 的 disable 會把 uuid 加進 disabled-extensions，且它優先於 enabled）
+     - uninstall.sh 從兩個清單拿掉 danwen（執行中的 GNOME 立刻卸載）並刪檔，其他 extension 不受影響
+     - 安裝與移除時偵測手動執行的 danwen（舊版沒有防重複），詢問後才停止；沒有終端機可詢問時一律不停止
+     - install.sh／uninstall.sh 共用函式移到 `scripts/common.sh`
    - 原規劃：頂列狀態圖示（待命／錄音／整理中）、錄音時的浮動提示、
    切換小紙條與瀏覽歷史的選單、設定畫面；也能提供目前焦點程式當上下文。
    - 與 danwen 常駐程式以 session D-Bus 溝通，因此 2～4 實作時先把狀態與操作整理成可對外的介面
