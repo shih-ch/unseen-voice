@@ -87,13 +87,14 @@ class RefineConfig:
 
 @dataclass
 class CloudConfig:
-    enabled: bool = False
+    plan: str = "hybrid"
     provider: str = "groq"
     account_id: str | None = None
     base_url: str | None = None
     asr_model: str | None = None
     llm_model: str | None = None
     asr_prompt: str = "以下是繁體中文的句子。"
+    asr_language: str | None = None
     use_for_asr: bool = True
     use_for_refine: bool = True
     timeout_s: float = 30.0

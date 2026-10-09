@@ -74,9 +74,15 @@ refine:
   context_to_cloud: false
 
 cloud:
-  # 雲端：語音辨識與整理模式改用雲端服務（錄音、文字會送出電腦）。預設關閉；
-  # 執行中可用 `danwen cloud on/off` 或 GNOME extension 選單切換，這裡是預設值
-  enabled: false
+  # 方案：哪些部分走雲端（走雲端的錄音或文字會送出電腦）
+  #   local       A 全部本機
+  #   hybrid      B 本機辨識＋Groq 整理（預設；只有整理模式的文字會送出，沒有金鑰時整理改用本機）
+  #   groq        C 全部用 Groq
+  #   cloudflare  D 全部用 Cloudflare（需填 account_id）
+  #   custom      E 依下面的 provider、use_for_asr、use_for_refine
+  # 執行中可用 `danwen cloud <方案>` 或 GNOME extension 選單切換，這裡是預設值
+  plan: hybrid
+  # 以下給 custom 方案使用（account_id 也給 D 使用）：
   # groq、openai、cloudflare，或 custom（任何 OpenAI 相容服務，需填 base_url）
   provider: groq
   # Cloudflare 的 Account ID（provider: cloudflare 時必填）
@@ -88,7 +94,10 @@ cloud:
   llm_model: null
   # 引導雲端 Whisper 輸出繁體；字典裡的專有名詞會自動附加
   asr_prompt: 以下是繁體中文的句子。
-  # 雲端開啟時，哪些部分走雲端
+  # 雲端辨識的語言：null＝自動判斷（實測中文、英文、中英夾雜都正確）；
+  # 固定 zh 時整句英文會被硬翻成中文，不建議
+  asr_language: null
+  # custom 方案時，哪些部分走雲端
   use_for_asr: true
   use_for_refine: true
   timeout_s: 30.0

@@ -20,16 +20,23 @@ class StubDaemon:
 
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
+        self.plan = "hybrid"
         self.calls: list[str] = []
 
     def current_mode(self):
         return self.mode
 
-    def cloud_enabled(self):
-        return False
+    def plan_properties(self):
+        return {"Plan": self.plan, "PlanTitle": "B 本機辨識＋Groq 整理", "Cloud": True,
+                "CloudAsr": False, "CloudRefine": True, "CloudProvider": "Groq"}
 
-    def cloud_label(self):
-        return "Groq"
+    def list_plans(self):
+        return [("local", "A 全部本機"), ("hybrid", "B 本機辨識＋Groq 整理")]
+
+    def set_plan(self, name):
+        if name not in ("local", "hybrid"):
+            raise ConfigError(f"沒有「{name}」這個方案")
+        self.plan = name
 
     def list_modes(self):
         return [("日常", "預設"), ("英文", "翻譯")]
@@ -84,6 +91,12 @@ def test_properties_and_methods(service):
         assert await iface.get_state() == "idle"
         assert await iface.get_mode() == "日常"
         assert await iface.get_hotkey() == "KEY_RIGHTCTRL"
+        assert await iface.get_plan() == "hybrid" and await iface.get_cloud_refine() is True
+        assert await iface.get_cloud_asr() is False
+        await iface.call_set_plan("local")
+        assert await iface.get_plan() == "local"
+        with pytest.raises(DBusError, match="沒有"):
+            await iface.call_set_plan("nope")
         assert [list(m) for m in await iface.call_list_modes()] == [["日常", "預設"], ["英文", "翻譯"]]
         await iface.call_set_mode("英文")
         assert await iface.get_mode() == "英文"

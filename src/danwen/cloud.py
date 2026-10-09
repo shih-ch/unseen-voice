@@ -1,7 +1,13 @@
-"""雲端：語音辨識與整理模式的 LLM 改用雲端服務（Groq、OpenAI、Cloudflare 或任何 OpenAI 相容服務）。
+"""雲端：語音辨識與整理模式可改用雲端服務（Groq、OpenAI、Cloudflare 或任何 OpenAI 相容服務）。
 
-預設關閉；開啟後錄音與文字會送到所選的服務。執行中可用 `danwen cloud on/off` 或 GNOME extension 選單切換，
-狀態存在 ~/.local/state/danwen/cloud（沒有這個檔案時依設定檔的 cloud.enabled）。
+用「方案」決定哪些部分走雲端：
+  A local       全部本機
+  B hybrid      本機辨識＋Groq 整理（預設；只有整理模式的文字會送出，沒有金鑰時整理改用本機）
+  C groq        全部用 Groq
+  D cloudflare  全部用 Cloudflare
+  E custom      依設定檔 cloud 區段的 provider、use_for_asr、use_for_refine
+執行中可用 `danwen cloud <方案>` 或 GNOME extension 選單切換，狀態存在 ~/.local/state/danwen/cloud
+（沒有這個檔案時依設定檔的 cloud.plan）。
 """
 
 from __future__ import annotations
@@ -107,11 +113,11 @@ def check_ready(cfg: CloudConfig) -> Endpoint:
     return endpoint
 
 
-def make_refiner(cfg: Config) -> Refiner:
+def make_refiner(cfg: Config, cloud_cfg: CloudConfig | None = None) -> Refiner:
     """整理模式改用雲端 LLM（OpenAI 相容介面），其餘設定（上下文等）沿用 refine。"""
     from .refine import Refiner
 
-    endpoint = resolve(cfg.cloud)
+    endpoint = resolve(cloud_cfg or cfg.cloud)
     refine_cfg = dataclasses.replace(
         cfg.refine, provider="openai", base_url=endpoint.llm_base_url,
         model=endpoint.llm_model, timeout_s=cfg.cloud.timeout_s,
@@ -124,13 +130,85 @@ def label(cfg: CloudConfig) -> str:
     return preset.label if preset else cfg.provider
 
 
-def is_enabled(cfg: CloudConfig) -> bool:
+# ---- 方案 ----
+
+
+@dataclass(frozen=True)
+class Plan:
+    name: str
+    letter: str
+    label: str
+    provider: str | None  # None＝依設定檔的 cloud.provider（custom）
+    asr: bool | None  # None＝依設定檔的 cloud.use_for_asr
+    refine: bool | None  # None＝依設定檔的 cloud.use_for_refine
+
+
+PLANS = {
+    "local": Plan("local", "A", "全部本機", None, False, False),
+    "hybrid": Plan("hybrid", "B", "本機辨識＋Groq 整理", "groq", False, True),
+    "groq": Plan("groq", "C", "全部用 Groq", "groq", True, True),
+    "cloudflare": Plan("cloudflare", "D", "全部用 Cloudflare", "cloudflare", True, True),
+    "custom": Plan("custom", "E", "自訂（依設定檔）", None, None, None),
+}
+DEFAULT_PLAN = "hybrid"
+
+
+@dataclass(frozen=True)
+class ActivePlan:
+    plan: Plan
+    cloud: CloudConfig  # 套用方案後的雲端設定（服務商、網址、模型）
+    asr: bool  # 語音辨識走雲端
+    refine: bool  # 整理模式走雲端
+
+    @property
+    def title(self) -> str:
+        return f"{self.plan.letter} {self.plan.label}"
+
+    @property
+    def uses_cloud(self) -> bool:
+        return self.asr or self.refine
+
+
+def plan_name(name: str) -> str:
+    """接受方案名稱或代號（A～E，不分大小寫）。"""
+    for plan in PLANS.values():
+        if name.lower() in (plan.name, plan.letter.lower()):
+            return plan.name
+    raise ConfigError(f"沒有「{name}」這個方案（可用：{'、'.join(f'{p.letter} {p.name}' for p in PLANS.values())}）")
+
+
+def current_plan_name(cfg: CloudConfig) -> str:
     try:
-        return STATE_FILE.read_text(encoding="utf-8").strip() == "on"
+        value = STATE_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        return cfg.enabled
+        return cfg.plan
+    if value == "off":  # 舊版存的是 on／off
+        return "local"
+    if value == "on":
+        return cfg.plan if cfg.plan != "local" else DEFAULT_PLAN
+    return value if value in PLANS else cfg.plan
 
 
-def set_enabled(on: bool) -> None:
+def resolve_plan(cfg: CloudConfig, name: str | None = None) -> ActivePlan:
+    plan = PLANS[plan_name(name or current_plan_name(cfg))]
+    cloud_cfg = cfg
+    if plan.provider is not None and plan.provider != cfg.provider:
+        # 換了服務商：設定檔裡給原服務商的網址與模型不適用，改用新服務商的預設
+        cloud_cfg = dataclasses.replace(cfg, provider=plan.provider, base_url=None, asr_model=None, llm_model=None)
+    return ActivePlan(
+        plan=plan,
+        cloud=cloud_cfg,
+        asr=cfg.use_for_asr if plan.asr is None else plan.asr,
+        refine=cfg.use_for_refine if plan.refine is None else plan.refine,
+    )
+
+
+def check_plan(active: ActivePlan) -> None:
+    """切換前檢查：方案用到雲端時，設定要完整、鑰匙圈要有金鑰（不連線）。"""
+    if active.uses_cloud:
+        check_ready(active.cloud)
+
+
+def set_plan(name: str) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text("on\n" if on else "off\n", encoding="utf-8")
+    STATE_FILE.write_text(plan_name(name) + "\n", encoding="utf-8")

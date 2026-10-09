@@ -14,9 +14,7 @@ import json
 import logging
 import re
 import threading
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +23,7 @@ import yaml
 
 from . import paths
 from .config import ConfigError, RefineConfig
+from .httpclient import HTTPError, post
 
 log = logging.getLogger(__name__)
 
@@ -169,19 +168,17 @@ class Refiner:
         self._extra = extra or {}
 
     def _post(self, url: str, payload: dict, headers: dict[str, str] | None = None) -> dict:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", **(headers or {})},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout_s) as resp:
-                return json.load(resp)
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:200]
-            raise RefineError(f"LLM 服務回應錯誤 {e.code}：{detail}") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise RefineError(f"連不到 LLM 服務 {self.base_url}：{e}") from e
+            return post(url, json.dumps(payload).encode(), "application/json", self.cfg.timeout_s, headers)
+        except HTTPError as e:
+            # 不把服務回傳的內容放進訊息：可能含帳號或組織代碼，會出現在通知與 log 裡
+            if e.status is None:
+                raise RefineError(f"連不到 LLM 服務 {self.base_url}（{e}）") from e
+            if e.status in (401, 403):
+                raise RefineError("LLM 服務拒絕了 API Key（金鑰錯誤或權限不足）") from e
+            if e.status == 429:
+                raise RefineError("超過 LLM 服務的用量限制（每分鐘或每日上限），稍後再試") from e
+            raise RefineError(f"LLM 服務回應錯誤（HTTP {e.status}）") from e
 
     def preload(self) -> None:
         """在背景先把模型載入記憶體（只對 ollama 有效），讓使用者說話的同時完成載入。"""

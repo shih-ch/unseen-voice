@@ -26,9 +26,14 @@ const IFACE_XML = `
     <property name="Kind" type="s" access="read"/>
     <property name="Mode" type="s" access="read"/>
     <property name="Hotkey" type="s" access="read"/>
+    <property name="Plan" type="s" access="read"/>
+    <property name="PlanTitle" type="s" access="read"/>
     <property name="Cloud" type="b" access="read"/>
+    <property name="CloudAsr" type="b" access="read"/>
+    <property name="CloudRefine" type="b" access="read"/>
     <property name="CloudProvider" type="s" access="read"/>
-    <method name="SetCloud"><arg type="b" name="on" direction="in"/></method>
+    <method name="ListPlans"><arg type="a(ss)" direction="out"/></method>
+    <method name="SetPlan"><arg type="s" name="name" direction="in"/></method>
     <method name="ListModes"><arg type="a(ss)" direction="out"/></method>
     <method name="SetMode"><arg type="s" name="name" direction="in"/></method>
     <method name="GetHistory">
@@ -265,10 +270,10 @@ class DanwenIndicator extends PanelMenu.Button {
         this._actions = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._actions);
 
-        // 打開時錄音與要整理的文字會送到雲端；切換失敗（例如還沒設定金鑰）會自動跳回
-        this._cloudSwitch = new PopupMenu.PopupSwitchMenuItem('使用雲端', false);
-        this._cloudSwitch.connect('toggled', (_item, on) => this._setCloud(on));
-        this.menu.addMenuItem(this._cloudSwitch);
+        // 方案：哪些部分走雲端（切換失敗時維持原方案並說明原因，例如還沒設定金鑰）
+        this._planMenu = new PopupMenu.PopupSubMenuMenuItem('方案');
+        this._planItems = new Map();
+        this.menu.addMenuItem(this._planMenu);
 
         this._modeMenu = new PopupMenu.PopupSubMenuMenuItem('小紙條');
         this.menu.addMenuItem(this._modeMenu);
@@ -301,12 +306,15 @@ class DanwenIndicator extends PanelMenu.Button {
         }
 
         const running = this._running;
-        if (running)
-            this._osd.update(this._proxy.State, this._proxy.Kind, this._proxy.Mode, this._proxy.Hotkey,
-                Boolean(this._proxy.Cloud));
-        else
+        if (running) {
+            // 只有這次錄音真的會送資料出去時才標 ☁：雲端辨識，或整理模式且整理走雲端
+            const {Kind: kind, CloudAsr: asr, CloudRefine: refine} = this._proxy;
+            this._osd.update(this._proxy.State, kind, this._proxy.Mode, this._proxy.Hotkey,
+                Boolean(asr || (kind === 'refine' && refine)));
+        } else {
             this._osd.update('offline', '', '', '', false);
-        for (const part of [this._modeMenu, this._historyHeader, this._history.actor, this._cloudSwitch])
+        }
+        for (const part of [this._modeMenu, this._historyHeader, this._history.actor, this._planMenu])
             part.visible = running;
         if (!running)
             this._redoMenu.visible = false; // 有紀錄時由 _refreshLists 打開
@@ -318,13 +326,15 @@ class DanwenIndicator extends PanelMenu.Button {
             return;
         }
 
-        const {State: current, Kind: kind, Mode: mode, Cloud: cloud, CloudProvider: provider} = this._proxy;
+        const {State: current, Kind: kind, Mode: mode, Plan: plan, PlanTitle: planTitle, Cloud: cloud} = this._proxy;
         const status = current === 'recording'
             ? `${STATE_LABELS.recording}（${KIND_LABELS[kind] ?? kind}）`
             : STATE_LABELS[current] ?? current;
-        this._statusItem.label.text = `${status}　·　小紙條：${mode}${cloud ? `　·　☁ 雲端（${provider}）` : ''}`;
-        this._cloudSwitch.label.text = provider ? `使用雲端（${provider}）` : '使用雲端';
-        this._cloudSwitch.setToggleState(Boolean(cloud));
+        const planShort = `${cloud ? '☁ ' : ''}方案 ${(planTitle ?? '').split(' ')[0]}`;
+        this._statusItem.label.text = `${status}　·　小紙條：${mode}　·　${planShort}`;
+        this._planMenu.label.text = `方案：${planTitle ?? ''}`;
+        for (const [name, item] of this._planItems)
+            item.setOrnament(name === plan ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
         this._modeMenu.label.text = `小紙條：${mode}`;
         for (const [name, item] of this._modeItems)
             item.setOrnament(name === mode ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
@@ -343,8 +353,9 @@ class DanwenIndicator extends PanelMenu.Button {
         if (!this._running)
             return;
         const generation = ++this._generation;
-        let modes, history;
+        let modes, history, plans;
         try {
+            [plans] = await this._proxy.ListPlansAsync();
             [modes] = await this._proxy.ListModesAsync();
             const [json] = await this._proxy.GetHistoryAsync(HISTORY_ITEMS);
             history = JSON.parse(json);
@@ -355,6 +366,15 @@ class DanwenIndicator extends PanelMenu.Button {
         // 讀取期間又觸發了一次更新，或 extension 已停用：放棄這次結果
         if (generation !== this._generation || !this._icon)
             return;
+
+        const plan = this._proxy.Plan;
+        this._planMenu.menu.removeAll();
+        this._planItems.clear();
+        for (const [name, title] of plans) {
+            const item = this._addItem(this._planMenu.menu, title, () => this._setPlan(name, title));
+            item.setOrnament(name === plan ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+            this._planItems.set(name, item);
+        }
 
         const mode = this._proxy.Mode;
         this._modeMenu.menu.removeAll();
@@ -393,14 +413,12 @@ class DanwenIndicator extends PanelMenu.Button {
         }
     }
 
-    async _setCloud(on) {
-        if (await this._call('SetCloudAsync', on) === null) {
-            this._cloudSwitch.setToggleState(!on); // 切換失敗，回到原本的狀態
-            return;
-        }
-        Main.notify(APP_NAME, on
-            ? `已改用雲端（${this._proxy.CloudProvider}）：錄音與要整理的文字會送到雲端`
-            : '已改回本機：全部在這台電腦上處理');
+    async _setPlan(name, title) {
+        if (await this._call('SetPlanAsync', name) === null)
+            return; // 失敗原因已由 _call 通知，維持原方案
+        const {CloudAsr: asr, CloudRefine: refine} = this._proxy;
+        const sent = [asr ? '錄音' : '', refine ? '要整理的文字' : ''].filter(Boolean).join('、');
+        Main.notify(APP_NAME, `已切換到方案 ${title}`, sent ? `${sent}會送到雲端` : '全部在這台電腦上處理');
     }
 
     async _redo(mode) {

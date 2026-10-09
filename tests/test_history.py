@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from danwen import cli, config, paths, refine
-from danwen.daemon import Daemon
+from danwen.daemon import Daemon, Job
 from danwen.history import History
 
 
@@ -101,8 +101,8 @@ def test_daemon_records_fast_and_refined_dictation(tmp_path, fake_llm, monkeypat
     llm = fake_llm("今天開會。")
     d = make_daemon(tmp_path, llm.url)
     audio = np.full(16000, 0.1, np.float32)  # 1 秒、音量夠
-    d._process(audio, time.monotonic(), False)
-    d._process(audio, time.monotonic(), True)
+    d._process(Job(audio, time.monotonic(), False))
+    d._process(Job(audio, time.monotonic(), True))
     refined, fast = d.history.entries()
     assert fast.mode is None and fast.text == "嗯，那個今天開會。"
     assert refined.mode == "日常"
@@ -136,12 +136,12 @@ def test_daemon_reads_context_only_when_enabled(tmp_path, fake_llm, monkeypatch)
     d = make_daemon(tmp_path, llm.url)
     audio = np.full(16000, 0.1, np.float32)
 
-    d._process(audio, time.monotonic(), True)  # 預設關閉：不讀
+    d._process(Job(audio, time.monotonic(), True))  # 預設關閉：不讀
     assert "參考資料" not in llm.requests[-1][1]["messages"][-1]["content"]
 
     d.cfg.refine.context_clipboard = True
     d.cfg.refine.context_max_chars = 50
-    d._process(audio, time.monotonic(), True)
+    d._process(Job(audio, time.monotonic(), True))
     last = llm.requests[-1][1]["messages"][-1]["content"]
     assert "黃保翕" in last and "選取的段落" not in last
     assert last.count("。") <= 50  # 有截斷
@@ -202,9 +202,9 @@ def test_long_recording_notice_only_without_overlay(tmp_path, fake_llm, overlay,
 def test_short_long_recording_is_treated_as_accidental(tmp_path, fake_llm):
     d = make_daemon(tmp_path, fake_llm("x").url)
     one_second = np.full(16000, 0.1, np.float32)
-    d._process(one_second, time.monotonic(), False, "long")  # 長錄音 1 秒：誤觸，不貼
+    d._process(Job(one_second, time.monotonic(), False, "long"))  # 長錄音 1 秒：誤觸，不貼
     assert d.paster.pasted == []
-    d._process(one_second, time.monotonic(), False, "fast")  # 按住錄音 1 秒：正常
+    d._process(Job(one_second, time.monotonic(), False, "fast"))  # 按住錄音 1 秒：正常
     assert d.paster.pasted == ["嗯，那個今天開會。"]
-    d._process(np.full(32000, 0.1, np.float32), time.monotonic(), False, "long")  # 長錄音 2 秒：正常
+    d._process(Job(np.full(32000, 0.1, np.float32), time.monotonic(), False, "long"))  # 長錄音 2 秒：正常
     assert len(d.paster.pasted) == 2

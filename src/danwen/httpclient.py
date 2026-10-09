@@ -7,6 +7,11 @@ import urllib.error
 import urllib.request
 import uuid
 
+from . import __version__
+
+# 一定要帶自己的 User-Agent：Groq 等服務前面有 Cloudflare，會擋掉 Python 預設的 "Python-urllib/x.y"（error 1010）
+USER_AGENT = f"danwen/{__version__}"
+
 
 class HTTPError(RuntimeError):
     def __init__(self, message: str, status: int | None = None):
@@ -32,7 +37,9 @@ def multipart(fields: dict[str, str], file_field: str, filename: str, data: byte
 
 def post(url: str, body: bytes, content_type: str, timeout: float, headers: dict[str, str] | None = None) -> dict:
     """送出 POST 並解析 JSON 回應；失敗時丟出 HTTPError（附狀態碼與服務回傳的錯誤摘要）。"""
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": content_type, **(headers or {})})
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": content_type, "User-Agent": USER_AGENT, **(headers or {})}
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)

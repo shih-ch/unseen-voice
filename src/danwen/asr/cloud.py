@@ -28,7 +28,8 @@ def friendly_error(error: HTTPError, service: str) -> cloud.CloudError:
         return cloud.CloudError(f"錄音太大，超過 {service} 的上限")
     if error.status is None:
         return cloud.CloudError(f"連不到 {service}（{error}）")
-    return cloud.CloudError(f"{service} 回應錯誤（{error}）")
+    # 不附上服務回傳的內容：可能含帳號或組織代碼，會出現在通知與 log 裡
+    return cloud.CloudError(f"{service} 回應錯誤（HTTP {error.status}）")
 
 
 class CloudASRBackend(ASRBackend):
@@ -60,9 +61,10 @@ class CloudASRBackend(ASRBackend):
         headers = {"Authorization": f"Bearer {key}"}
         try:
             if endpoint.asr_api == "cloudflare":
-                body = json.dumps(
-                    {"audio": base64.b64encode(wav).decode(), "language": "zh", "initial_prompt": self._prompt()}
-                ).encode()
+                payload = {"audio": base64.b64encode(wav).decode(), "initial_prompt": self._prompt()}
+                if self.cfg.asr_language:
+                    payload["language"] = self.cfg.asr_language
+                body = json.dumps(payload).encode()
                 result = post(f"{endpoint.base_url}/run/{endpoint.asr_model}", body, "application/json",
                               self.cfg.timeout_s, headers)
                 if not result.get("success", True):
@@ -70,11 +72,12 @@ class CloudASRBackend(ASRBackend):
                 return str((result.get("result") or {}).get("text", "")).strip()
             fields = {
                 "model": endpoint.asr_model,
-                "language": "zh",
                 "prompt": self._prompt(),
                 "response_format": "json",
                 "temperature": "0",
             }
+            if self.cfg.asr_language:  # 沒指定時讓 Whisper 自動判斷語言
+                fields["language"] = self.cfg.asr_language
             body, content_type = multipart(fields, "file", "audio.wav", wav)
             result = post(f"{endpoint.base_url}/audio/transcriptions", body, content_type,
                           self.cfg.timeout_s, headers)

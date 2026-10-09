@@ -11,7 +11,7 @@ import os
 import threading
 import time
 
-from danwen import refine
+from danwen import cloud, refine
 from danwen.config import ConfigError
 from danwen.dbus_service import DBusService
 
@@ -26,7 +26,7 @@ class FakeDaemon:
 
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
-        self.cloud = False
+        self.plan = "hybrid"
         self._refused_once = False
         self.manual = threading.Event()  # 由選單控制錄音時停止自動切換
         self.service: DBusService | None = None
@@ -51,20 +51,24 @@ class FakeDaemon:
     def current_mode(self):
         return self.mode
 
-    def cloud_enabled(self):
-        return self.cloud
+    def plan_properties(self):
+        p = cloud.PLANS[self.plan]
+        asr, refine_ = bool(p.asr), bool(p.refine)
+        return {"Plan": p.name, "PlanTitle": f"{p.letter} {p.label}", "Cloud": asr or refine_,
+                "CloudAsr": asr, "CloudRefine": refine_, "CloudProvider": "Groq" if asr or refine_ else ""}
 
-    def cloud_label(self):
-        return "Groq"
+    def list_plans(self):
+        return [(p.name, f"{p.letter} {p.label}") for p in cloud.PLANS.values()]
 
-    def set_cloud(self, on):
-        # DANWEN_FAKE_NO_KEY=1 時一律模擬「還沒設定金鑰」；=once 時只有第一次，用來看選單開關會不會跳回
+    def set_plan(self, name):
+        # DANWEN_FAKE_NO_KEY=1 時切到雲端方案一律模擬「還沒設定金鑰」；=once 時只有第一次
+        name = cloud.plan_name(name)
         no_key = os.environ.get("DANWEN_FAKE_NO_KEY")
-        if on and (no_key == "1" or (no_key == "once" and not self._refused_once)):
+        if name != "local" and (no_key == "1" or (no_key == "once" and not self._refused_once)):
             self._refused_once = True
             raise RuntimeError("還沒設定 Groq 的 API Key，請執行：danwen key set groq")
-        self.cloud = on
-        print(f"雲端：{'開' if on else '關'}", flush=True)
+        self.plan = name
+        print(f"方案：{name}", flush=True)
 
     def list_modes(self):
         return [(name, refine.load_prompt(name).description) for name in refine.available_prompts()]

@@ -92,32 +92,37 @@ refine:
 - 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
 
-## 雲端（選用，預設關閉）
+## 方案：本機與雲端
 
-需要更好的英文、專有名詞辨識或整理品質時，可以把**語音辨識與整理模式**改用雲端服務。
-開啟時錄音與要整理的文字會送到該服務；選單與錄音提示會顯示「☁ 雲端」。
+用「方案」決定哪些部分走雲端（走雲端的錄音或文字會送出電腦）：
 
-| 服務商 | 語音辨識（預設） | 整理模式（預設） | 說明 |
+| 方案 | 語音辨識 | 整理模式 | 費用（個人用量） |
 |---|---|---|---|
-| `groq`（預設） | whisper-large-v3-turbo | openai/gpt-oss-20b | 便宜、有免費額度 |
-| `openai` | gpt-transcribe | gpt-4o-mini | |
-| `cloudflare` | @cf/openai/whisper-large-v3-turbo | @cf/qwen/qwen3-30b-a3b-fp8 | 需填 `cloud.account_id`；整理模型待實測 |
-| `custom` | 自訂 | 自訂 | 任何 OpenAI 相容服務（填 `cloud.base_url` 與模型） |
+| A `local` 全部本機 | 本機 SenseVoice | 本機 Ollama | 免費 |
+| **B `hybrid` 本機辨識＋Groq 整理（預設）** | 本機 SenseVoice | ☁ Groq gpt-oss-20b | Groq 免費額度內 0 元 |
+| C `groq` 全部用 Groq | ☁ Groq whisper-large-v3-turbo | ☁ Groq | 免費額度內 0 元 |
+| D `cloudflare` 全部用 Cloudflare | ☁ @cf/openai/whisper-large-v3-turbo | ☁ @cf/qwen/qwen3-30b-a3b-fp8（待實測） | 每天約 214 分鐘免費 |
+| E `custom` 自訂 | 依設定檔 `cloud` 區段 | 依設定檔 | |
+
+- **B 為預設**：快速模式的錄音不離開電腦，只有整理模式的文字會送到 Groq。還沒設定 Groq 金鑰時，整理自動改用本機（只通知一次）
+- 實測（Groq）：整理一句約 0.7 秒（本機約 2～4 秒），11 句測試集除了 OpenCC 用語轉換與速率限制外全部正確；
+  雲端辨識預設**自動判斷語言**（固定中文時整句英文會被硬翻成中文）
+- Groq 免費額度的 LLM 上限約每分鐘 8,000 token，大約每分鐘 8 次整理；超過時那一次改用本機
+- 只有這次錄音真的會送資料出去時，錄音提示才顯示「☁」
 
 ```bash
 danwen key set groq     # 輸入 API Key（不顯示），存進 GNOME 鑰匙圈
-danwen cloud            # 查看設定與金鑰狀態
-danwen cloud test       # 實測連線（可加 錄音.wav）；會產生極少量費用
-danwen cloud on         # 開啟（也可在 GNOME extension 選單切換）
-danwen cloud off
+danwen cloud            # 目前方案、各方案能不能用（缺什麼）
+danwen cloud B          # 切換方案（名稱或代號：local/A、hybrid/B、groq/C、cloudflare/D、custom/E；也可在 extension 選單切換）
+danwen cloud test       # 實測目前方案用到的部分（會產生極少量費用）
 danwen key status / danwen key delete groq
 ```
 
-- **金鑰**存在 GNOME 鑰匙圈（以登入密碼加密），不寫進設定檔或 log。建議建立**權限最小**的金鑰
-  （Cloudflare 只給 Workers AI 權限），並在服務商後台設定**用量上限**
-- **失敗時**（斷網、額度用完、金鑰錯誤）語音辨識自動改用本機並通知，照樣貼上；整理失敗則貼原文
+- **金鑰**存在 GNOME 鑰匙圈（以登入密碼加密），不寫進設定檔或 log；服務回傳的錯誤內容（可能含帳號代碼）也不會寫進通知與 log。
+  建議建立**權限最小**的金鑰（Cloudflare 只給 Workers AI 權限），並在服務商後台設定**用量上限**
+- **失敗時**（斷網、額度用完、金鑰錯誤）改用本機並通知，照樣貼上
 - **上下文**（剪貼簿、選取文字）仍需另外開啟 `refine.context_to_cloud` 才會送到雲端
-- 雲端設定在 `config.yaml` 的 `cloud` 區段；`enabled` 是預設值，執行中切換的狀態存在 `~/.local/state/danwen/cloud`
+- 方案的預設值是 `config.yaml` 的 `cloud.plan`；執行中切換的狀態存在 `~/.local/state/danwen/cloud`
 
 ## 歷史紀錄
 
@@ -159,7 +164,7 @@ danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit�
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
 danwen dict               # 替換字典：列出、新增、刪除
 danwen history            # 歷史紀錄：列出最近 20 次聽寫
-danwen cloud / key        # 雲端：狀態、開關、實測；API Key 存取（GNOME 鑰匙圈）
+danwen cloud / key        # 方案：查看、切換、實測；API Key 存取（GNOME 鑰匙圈）
 danwen bench -b C         # 用雲端語音辨識跑 benchmark
 danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A

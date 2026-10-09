@@ -147,3 +147,13 @@ def test_context_not_sent_to_cloud_unless_allowed(user_dirs, tmp_path, monkeypat
     assert "機密資料" in str(sent[-1])  # 明確開啟後才送
 
     assert Refiner(RefineConfig(base_url="http://localhost:11434")).context_allowed()
+
+
+def test_http_errors_do_not_leak_service_details(fake_http, user_dirs):
+    secret = {"error": {"message": "Rate limit ... organization `org_SECRET123`"}}
+    for status, message in [(429, "用量限制"), (401, "拒絕了 API Key"), (500, "HTTP 500")]:
+        server = fake_http({"/v1/chat/completions": (status, secret)})
+        r = Refiner(RefineConfig(provider="openai", base_url=server.url + "/v1"), api_key=lambda: "k")
+        with pytest.raises(RefineError, match=message) as info:
+            r.refine("今天開會。", "日常")
+        assert "org_SECRET123" not in str(info.value)

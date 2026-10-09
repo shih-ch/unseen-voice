@@ -32,6 +32,15 @@ from .refine import RefineError, Refiner, available_prompts, current_mode, load_
 log = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class Job:
+    audio: np.ndarray
+    released: float
+    refine: bool
+    kind: str = "fast"
+    refine_cloud: bool = False  # 錄音開始時就決定整理要不要走雲端
+
+
 class Daemon:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -50,8 +59,10 @@ class Daemon:
             cfg.long_recording.max_duration_s if cfg.long_recording.enabled else 0.0,
         )
         self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
-        # 雲端（預設關閉）：本機的 backend 與 Refiner 一直保留，雲端失敗時改用本機
-        self.cloud_asr = CloudASRBackend(cfg.cloud, terms=self.post.replacements.terms)
+        # 雲端依方案決定；本機的 backend 與 Refiner 一直保留，雲端不能用或失敗時改用本機
+        cloud.resolve_plan(cfg.cloud)  # 設定檔的方案名稱有誤時，啟動就報錯
+        self._plan_warning = ""
+        self._refine_cloud = False
         self.history = (
             History(size=cfg.history.size, keep_audio=cfg.history.keep_audio) if cfg.history.size > 0 else None
         )
@@ -62,7 +73,7 @@ class Daemon:
         self._state_lock = threading.Lock()
         self._listener: KeyboardListener | None = None
         self._refining = False
-        self._jobs: queue.Queue[tuple[np.ndarray, float, bool, str] | None] = queue.Queue()
+        self._jobs: queue.Queue[Job | None] = queue.Queue()
         self._stop = threading.Event()
 
     def _start_dbus(self) -> None:
@@ -81,7 +92,7 @@ class Daemon:
     def _watch_settings(self) -> None:
         last = None
         while not self._stop.wait(1.0):
-            current = {"Mode": self.current_mode(), "Cloud": self.cloud_enabled()}
+            current = {"Mode": self.current_mode(), **self.plan_properties()}
             if last is not None and current != last:
                 self.dbus.notify_properties({k: v for k, v in current.items() if last.get(k) != v})
             last = current
@@ -150,13 +161,14 @@ class Daemon:
             # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
             if long and not (self.dbus and self.dbus.overlay_present()):
                 self.feedback.info(f"長錄音中：再按一下 {display_name(self.cfg.hotkey.key)} 結束，Esc 取消")
-            if self._refining and not self._cloud_refine():
+            self._refine_cloud = self._refining and self._cloud_refine_ready()
+            if self._refining and not self._refine_cloud:
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
             audio = self.recorder.stop()
             self.feedback.stop()
             self._set_state("processing")
-            self._jobs.put((audio, now, self._refining, self.kind))
+            self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_cloud))
         elif action is Action.CANCEL:
             self.recorder.stop()
             self._set_state("idle")
@@ -165,7 +177,7 @@ class Daemon:
     def _worker(self) -> None:
         while (job := self._jobs.get()) is not None:
             try:
-                self._process(*job)
+                self._process(job)
             except ASRUnavailable as e:
                 self.feedback.error(str(e))
             except Exception as e:
@@ -196,33 +208,74 @@ class Daemon:
             log.info("上下文：%s", "、".join(f"{k} {len(v)} 字" for k, v in context.items()))
         return context or None
 
-    # ---- 雲端 ----
+    # ---- 方案（本機／雲端） ----
 
-    def cloud_enabled(self) -> bool:
-        return cloud.is_enabled(self.cfg.cloud)
+    def plan(self) -> cloud.ActivePlan:
+        return cloud.resolve_plan(self.cfg.cloud)
 
-    def cloud_label(self) -> str:
-        return cloud.label(self.cfg.cloud)
+    def plan_properties(self) -> dict:
+        active = self.plan()
+        return {
+            "Plan": active.plan.name,
+            "PlanTitle": active.title,
+            "Cloud": active.uses_cloud,
+            "CloudAsr": active.asr,
+            "CloudRefine": active.refine,
+            "CloudProvider": cloud.label(active.cloud) if active.uses_cloud else "",
+        }
 
-    def set_cloud(self, on: bool) -> None:
-        if on:
-            cloud.check_ready(self.cfg.cloud)  # 免得開了才發現不能用
-        cloud.set_enabled(on)
-        log.info("雲端：%s（%s）", "開" if on else "關", self.cloud_label())
+    def list_plans(self) -> list[tuple[str, str]]:
+        return [(p.name, f"{p.letter} {p.label}") for p in cloud.PLANS.values()]
 
-    def _cloud_refine(self) -> bool:
-        return self.cloud_enabled() and self.cfg.cloud.use_for_refine
+    def set_plan(self, name: str) -> None:
+        active = cloud.resolve_plan(self.cfg.cloud, name)
+        cloud.check_plan(active)  # 缺金鑰或設定不完整就不切換，免得切了才發現不能用
+        cloud.set_plan(active.plan.name)
+        self._plan_warning = ""
+        log.info("方案：%s", active.title)
+
+    def _cloud_refine_ready(self) -> bool:
+        """這次整理能不能走雲端。方案要雲端卻缺金鑰時改用本機，同一個原因只通知一次。"""
+        active = self.plan()
+        if not active.refine:
+            return False
+        try:
+            cloud.check_ready(active.cloud)
+        except (cloud.CloudError, ConfigError) as e:
+            if self._plan_warning != str(e):
+                self._plan_warning = str(e)
+                self.feedback.notice(f"方案 {active.title}：{e}。整理暫時改用本機")
+            return False
+        self._plan_warning = ""
+        return True
 
     def _transcribe(self, audio: np.ndarray, sr: int) -> tuple[str, str]:
-        """雲端開啟時先用雲端辨識，失敗就改用本機（本機模型一直保持載入）。"""
-        if self.cloud_enabled() and self.cfg.cloud.use_for_asr:
+        """方案用雲端辨識時先試雲端，失敗就改用本機（本機模型一直保持載入）。"""
+        active = self.plan()
+        if active.asr:
+            backend = CloudASRBackend(active.cloud, terms=self.post.replacements.terms)
             try:
-                return self.cloud_asr.transcribe(audio, sr), self.cloud_asr.name
+                return backend.transcribe(audio, sr), backend.name
             except (cloud.CloudError, ConfigError) as e:
                 self.feedback.notice(f"雲端辨識失敗，改用本機（{e}）")
         return self.backend.transcribe(audio, sr), self.backend.name
 
-    def _process(self, audio: np.ndarray, released: float, refine: bool, kind: str = "fast") -> None:
+    def _refine(self, text: str, mode: str, use_cloud: bool) -> tuple[str, str]:
+        """整理文字；雲端失敗改用本機，本機也失敗就丟出錯誤（由呼叫端改貼原文）。回傳（結果, 用了哪裡）。"""
+        terms = self.post.replacements.terms()
+        context = self._context()
+        if use_cloud:
+            active = self.plan()
+            try:
+                refiner = cloud.make_refiner(self.cfg, active.cloud)
+                # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
+                return self.post(refiner.refine(text, mode, terms, context)), f"雲端 {cloud.label(active.cloud)}"
+            except (RefineError, ConfigError) as e:
+                self.feedback.notice(f"雲端整理失敗，改用本機（{e}）")
+        return self.post(self.refiner.refine(text, mode, terms, context)), "本機"
+
+    def _process(self, job: Job) -> None:
+        audio, released, refine, kind = job.audio, job.released, job.refine, job.kind
         sr = self.cfg.audio.sample_rate
         duration = audio.size / sr
         # 長錄音不必按著，連按想停止時很容易又開始一段很短的；這種當作誤觸
@@ -239,15 +292,12 @@ class Daemon:
         t1 = time.monotonic()
         text = plain = self.post(raw)
         t2 = time.monotonic()
-        mode = ""
+        mode = where = ""
         refined_with: str | None = None
         if refine and text:
             mode = current_mode(self.cfg.refine.mode)
             try:
-                refiner = cloud.make_refiner(self.cfg) if self._cloud_refine() else self.refiner
-                # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
-                terms = self.post.replacements.terms()
-                text = self.post(refiner.refine(text, mode, terms, self._context()))
+                text, where = self._refine(text, mode, job.refine_cloud)
                 refined_with = mode
             except (RefineError, ConfigError) as e:
                 self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
@@ -258,7 +308,7 @@ class Daemon:
         log.info(
             "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 整理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s%s",
             duration, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - released, len(text), asr_name,
-            f" 小紙條={mode}{'（雲端）' if self._cloud_refine() else ''}" if mode else "",
+            f" 小紙條={mode}（{where or '失敗'}）" if mode else "",
         )
         if self.cfg.log.log_text:
             log.info("文字：%s", text)

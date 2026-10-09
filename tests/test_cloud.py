@@ -53,13 +53,27 @@ def test_presets_and_validation():
         cloud.resolve(CloudConfig(provider="nope"))
 
 
-def test_enable_state_file():
-    cfg = CloudConfig(enabled=False)
-    assert cloud.is_enabled(cfg) is False
-    cloud.set_enabled(True)
-    assert cloud.is_enabled(cfg) is True
-    cloud.set_enabled(False)
-    assert cloud.is_enabled(CloudConfig(enabled=True)) is False  # 執行中的切換優先於設定檔
+def test_plans_and_state_file():
+    cfg = CloudConfig()
+    assert cloud.current_plan_name(cfg) == "hybrid"  # 預設 B
+    b = cloud.resolve_plan(cfg)
+    assert (b.asr, b.refine, b.cloud.provider, b.title) == (False, True, "groq", "B 本機辨識＋Groq 整理")
+    assert cloud.resolve_plan(cfg, "a").uses_cloud is False  # 代號不分大小寫
+    cloud.set_plan("D")
+    assert cloud.current_plan_name(cfg) == "cloudflare"
+    cloud.STATE_FILE.write_text("off\n")  # 舊版的 on／off
+    assert cloud.current_plan_name(cfg) == "local"
+    cloud.STATE_FILE.write_text("on\n")
+    assert cloud.current_plan_name(cfg) == "hybrid"
+    with pytest.raises(ConfigError):
+        cloud.resolve_plan(cfg, "nope")
+
+
+def test_plan_switching_provider_drops_other_providers_settings():
+    cfg = CloudConfig(provider="openai", base_url="https://example.com/v1", llm_model="my-model")
+    c = cloud.resolve_plan(cfg, "groq").cloud  # 換成 Groq：不沿用給 OpenAI 的網址與模型
+    assert c.base_url is None and c.llm_model is None
+    assert cloud.resolve_plan(cfg, "custom").cloud.base_url == "https://example.com/v1"
 
 
 def test_groq_style_transcription(fake_http):
@@ -70,7 +84,7 @@ def test_groq_style_transcription(fake_http):
     assert req["headers"]["Authorization"] == "Bearer key-groq"
     body = req["body"]
     assert b'name="model"\r\n\r\nwhisper-large-v3-turbo' in body
-    assert b'name="language"\r\n\r\nzh' in body
+    assert b'name="language"' not in body  # 預設自動判斷語言
     assert "專有名詞：Kubernetes".encode() in body
     assert b"RIFF" in body  # 附上 WAV
 
@@ -82,7 +96,7 @@ def test_cloudflare_transcription(fake_http):
     assert req["headers"]["Authorization"] == "Bearer key-cloudflare"
     payload = json.loads(req["body"])
     assert base64.b64decode(payload["audio"])[:4] == b"RIFF"
-    assert payload["language"] == "zh"
+    assert "language" not in payload
 
 
 @pytest.mark.parametrize("status, message", [(401, "拒絕了 API Key"), (429, "用量限制"), (500, "回應錯誤")])
@@ -162,39 +176,81 @@ def make_daemon(tmp_path, cloud_cfg):
     d.backend = LocalBackend()
     d.paster = StubPaster()
     d.history = History(tmp_path / "history", size=10)
-    d.cloud_asr._api_key = key
     notices = []
     d.feedback.notice = notices.append
     return d, notices
 
 
-def test_daemon_uses_cloud_and_falls_back_to_local(tmp_path, fake_http):
+def job(refine=False, refine_cloud=False):
+    from danwen.daemon import Job
+
+    return Job(AUDIO, time.monotonic(), refine, "refine" if refine else "fast", refine_cloud)
+
+
+def test_plan_routing_and_fallback(tmp_path, fake_http):
     server = fake_http({GROQ_ASR: (200, {"text": "雲端的結果。"})})
     d, notices = make_daemon(tmp_path, groq(server.url))
-    d._process(AUDIO, time.monotonic(), False)
-    assert d.paster.pasted[-1] == "本機的結果。"  # 雲端沒開
+    d._process(job())
+    assert d.paster.pasted[-1] == "本機的結果。"  # 預設 B：語音辨識在本機
+    assert server.requests == []  # 沒有送出錄音
 
-    cloud.set_enabled(True)
-    d._process(AUDIO, time.monotonic(), False)
+    d.set_plan("groq")  # C：全部雲端
+    d._process(job())
     assert d.paster.pasted[-1] == "雲端的結果。"
     assert d.history.get().backend == "cloud:groq"
 
     server.routes[GROQ_ASR] = (503, {"error": "down"})
-    d._process(AUDIO, time.monotonic(), False)
+    d._process(job())
     assert d.paster.pasted[-1] == "本機的結果。"  # 雲端失敗改用本機，照樣貼上
     assert "雲端辨識失敗" in notices[-1]
 
 
-def test_set_cloud_checks_key(tmp_path, monkeypatch):
+def test_plan_b_refines_in_cloud_and_falls_back_to_local(tmp_path, fake_http, fake_llm):
+    # 整理結果要大致出自原文（「本機的結果。」），否則會被防呆判定為被帶走
+    server = fake_http({GROQ_CHAT: (200, {"choices": [{"message": {"content": "本機的結果，雲端整理。"}}]})})
+    local = fake_llm("本機的結果，本機整理。")
+    d, notices = make_daemon(tmp_path, groq(server.url))
+    d.refiner = refine.Refiner(config.RefineConfig(base_url=local.url))
+    assert d._cloud_refine_ready() is True
+    d._process(job(refine=True, refine_cloud=True))
+    assert d.paster.pasted[-1] == "本機的結果，雲端整理。"
+
+    server.routes[GROQ_CHAT] = (500, {"error": "x"})
+    d._process(job(refine=True, refine_cloud=True))
+    assert d.paster.pasted[-1] == "本機的結果，本機整理。"  # 雲端整理失敗改用本機
+    assert "雲端整理失敗" in notices[-1]
+
+
+def test_plan_b_without_key_uses_local_and_warns_once(tmp_path, monkeypatch):
+    def no_key(provider):
+        raise cloud.CloudError("還沒設定 Groq 的 API Key")
+
+    monkeypatch.setattr(cloud, "api_key", no_key)
+    d, notices = make_daemon(tmp_path, CloudConfig())
+    assert d._cloud_refine_ready() is False
+    assert d._cloud_refine_ready() is False
+    assert len(notices) == 1 and "整理暫時改用本機" in notices[0]  # 同一個原因只通知一次
+
+
+def test_set_plan_checks_requirements(tmp_path, monkeypatch):
     d, _ = make_daemon(tmp_path, CloudConfig())
-    d.set_cloud(True)
-    assert d.cloud_enabled()
+    d.set_plan("C")
+    assert d.plan().plan.name == "groq"
+    with pytest.raises(ConfigError, match="account_id"):
+        d.set_plan("cloudflare")
 
     def no_key(provider):
         raise cloud.CloudError("還沒設定 Groq 的 API Key")
 
     monkeypatch.setattr(cloud, "api_key", no_key)
-    cloud.set_enabled(False)
     with pytest.raises(cloud.CloudError, match="還沒設定"):
-        d.set_cloud(True)
-    assert not d.cloud_enabled()
+        d.set_plan("hybrid")
+    assert d.plan().plan.name == "groq"  # 切換失敗，維持原方案
+    d.set_plan("local")  # 全部本機不需要金鑰
+    assert d.plan_properties()["Cloud"] is False
+
+
+def test_fixed_language_is_sent_when_configured(fake_http):
+    server = fake_http({GROQ_ASR: (200, {"text": "今天開會。"})})
+    CloudASRBackend(groq(server.url, asr_language="zh"), api_key=key).transcribe(AUDIO, 16000)
+    assert b'name="language"\r\n\r\nzh' in server.requests[0]["body"]

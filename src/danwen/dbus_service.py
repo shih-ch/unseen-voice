@@ -58,18 +58,39 @@ class _Interface(ServiceInterface):
     def Hotkey(self) -> "s":  # evdev 按鍵名稱，例如 KEY_RIGHTCTRL
         return self._daemon.cfg.hotkey.key
 
+    # 方案：哪些部分走雲端（走雲端的錄音或文字會送出電腦）
     @dbus_property(access=PropertyAccess.READ)
-    def Cloud(self) -> "b":  # 是否使用雲端（錄音、文字會送出電腦）
-        return self._daemon.cloud_enabled()
+    def Plan(self) -> "s":  # local / hybrid / groq / cloudflare / custom
+        return self._daemon.plan_properties()["Plan"]
 
     @dbus_property(access=PropertyAccess.READ)
-    def CloudProvider(self) -> "s":  # 服務商名稱，例如 Groq
-        return self._daemon.cloud_label()
+    def PlanTitle(self) -> "s":  # 例如「B 本機辨識＋Groq 整理」
+        return self._daemon.plan_properties()["PlanTitle"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Cloud(self) -> "b":  # 方案有沒有用到雲端
+        return self._daemon.plan_properties()["Cloud"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def CloudAsr(self) -> "b":  # 語音辨識走雲端（錄音會送出）
+        return self._daemon.plan_properties()["CloudAsr"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def CloudRefine(self) -> "b":  # 整理模式走雲端（要整理的文字會送出）
+        return self._daemon.plan_properties()["CloudRefine"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def CloudProvider(self) -> "s":  # 服務商名稱，例如 Groq；全部本機時為空字串
+        return self._daemon.plan_properties()["CloudProvider"]
 
     @method()
-    def SetCloud(self, on: "b"):
-        self._call(self._daemon.set_cloud, on)
-        self.emit_properties_changed({"Cloud": on})
+    def ListPlans(self) -> "a(ss)":
+        return [[name, title] for name, title in self._call(self._daemon.list_plans)]
+
+    @method()
+    def SetPlan(self, name: "s"):
+        self._call(self._daemon.set_plan, name)
+        self.emit_properties_changed(self._daemon.plan_properties())
 
     @method()
     def ListModes(self) -> "a(ss)":

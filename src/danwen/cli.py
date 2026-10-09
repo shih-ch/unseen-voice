@@ -322,58 +322,71 @@ def cmd_cloud(args: argparse.Namespace, cfg: config.Config) -> int:
     from .asr.cloud import CloudASRBackend
     from .refine import RefineError
 
+    action = args.action
     try:
-        if args.action == "on":
-            cloud.check_ready(cfg.cloud)
-            cloud.set_enabled(True)
-            print(f"已開啟雲端（{cloud.label(cfg.cloud)}）：之後的錄音與要整理的文字會送到雲端")
-            return 0
-        if args.action == "off":
-            cloud.set_enabled(False)
-            print("已關閉雲端：全部回到本機")
-            return 0
-        if args.action == "test":
-            endpoint = cloud.check_ready(cfg.cloud)
-            print(f"測試 {endpoint.label}（會實際呼叫，產生極少量費用）")
-            if args.wav:
-                from .audio import read_wav
+        if action == "test":
+            active = cloud.resolve_plan(cfg.cloud)
+            if not active.uses_cloud:
+                print(f"目前方案是 {active.title}，沒有用到雲端，不需要測試")
+                return 0
+            endpoint = cloud.check_ready(active.cloud)
+            print(f"測試方案 {active.title}（{endpoint.label}，會實際呼叫，產生極少量費用）")
+            if active.asr:
+                if args.wav:
+                    from .audio import read_wav
 
-                audio, sr = read_wav(args.wav)
-            else:
-                audio, sr = np.zeros(16000, dtype=np.float32), 16000  # 1 秒靜音：只測連線與金鑰
-            t = time.monotonic()
-            text = CloudASRBackend(cfg.cloud).transcribe(audio, sr)
-            print(f"  語音辨識 {endpoint.asr_model}：{time.monotonic() - t:.2f} 秒 → {text or '（空白）'}")
-            t = time.monotonic()
-            result = cloud.make_refiner(cfg).refine("嗯，那個今天天氣很好，然後我們去散步。", "日常")
-            print(f"  整理模式 {endpoint.llm_model}：{time.monotonic() - t:.2f} 秒 → {result}")
+                    audio, sr = read_wav(args.wav)
+                else:
+                    audio, sr = np.zeros(16000, dtype=np.float32), 16000  # 1 秒靜音：只測連線與金鑰
+                t = time.monotonic()
+                text = CloudASRBackend(active.cloud).transcribe(audio, sr)
+                print(f"  語音辨識 {endpoint.asr_model}：{time.monotonic() - t:.2f} 秒 → {text or '（空白）'}")
+            if active.refine:
+                t = time.monotonic()
+                result = cloud.make_refiner(cfg, active.cloud).refine("嗯，那個今天天氣很好，然後我們去散步。", "日常")
+                print(f"  整理模式 {endpoint.llm_model}：{time.monotonic() - t:.2f} 秒 → {result}")
             return 0
-    except (cloud.CloudError, RefineError) as e:
+        if action and action != "status":
+            name = {"off": "local", "on": cfg.cloud.plan if cfg.cloud.plan != "local" else cloud.DEFAULT_PLAN}.get(
+                action, action
+            )
+            active = cloud.resolve_plan(cfg.cloud, name)
+            cloud.check_plan(active)
+            cloud.set_plan(active.plan.name)
+            sent = "、".join(p for p, on in (("錄音", active.asr), ("要整理的文字", active.refine)) if on)
+            print(f"已切換到方案 {active.title}" + (f"：{sent}會送到雲端" if sent else "：全部在本機"))
+            return 0
+    except (cloud.CloudError, RefineError, config.ConfigError) as e:
         print(f"失敗：{e}", file=sys.stderr)
         return 1
 
-    endpoint = None
-    try:
-        endpoint = cloud.resolve(cfg.cloud)
-    except config.ConfigError as e:
-        problem = str(e)
-    else:
-        problem = ""
-    try:
-        cloud.api_key(cfg.cloud.provider)
-        key_status = "已設定"
-    except cloud.CloudError as e:
-        key_status = f"未設定（{e}）"
-    on = cloud.is_enabled(cfg.cloud)
-    print(f"雲端：{'☁ 開啟' if on else '關閉（全部在本機）'}　服務商：{cloud.label(cfg.cloud)}")
-    if endpoint:
-        print(f"  語音辨識：{endpoint.asr_model}{'' if cfg.cloud.use_for_asr else '（設定為不使用）'}")
-        print(f"  整理模式：{endpoint.llm_model}{'' if cfg.cloud.use_for_refine else '（設定為不使用）'}")
-        print(f"  網址：{endpoint.base_url}")
-    else:
-        print(f"  設定不完整：{problem}")
-    print(f"  API Key：{key_status}")
-    print("切換：danwen cloud on／off　實測：danwen cloud test [錄音.wav]")
+    current = cloud.resolve_plan(cfg.cloud)
+    default_mark = "（設定檔預設）" if current.plan.name == cfg.cloud.plan else ""
+    print(f"目前方案：{current.title}{default_mark}")
+    for part, on in (("語音辨識", current.asr), ("整理模式", current.refine)):
+        if not on:
+            print(f"  {part}：本機")
+            continue
+        try:
+            endpoint = cloud.resolve(current.cloud)
+            model = endpoint.asr_model if part == "語音辨識" else endpoint.llm_model
+            print(f"  {part}：☁ {endpoint.label} {model}")
+        except config.ConfigError as e:
+            print(f"  {part}：☁ 設定不完整（{e}）")
+    print("\n可用方案（danwen cloud <名稱或代號> 切換）：")
+    for plan in cloud.PLANS.values():
+        active = cloud.resolve_plan(cfg.cloud, plan.name)
+        if active.uses_cloud:
+            try:
+                cloud.check_ready(active.cloud)
+                ready = "✓ 可用"
+            except (cloud.CloudError, config.ConfigError) as e:
+                ready = f"✗ {e}"
+        else:
+            ready = "✓ 可用"
+        mark = "＊" if plan.name == current.plan.name else "  "
+        print(f"  {mark}{plan.letter} {plan.name:<10} {_pad(plan.label, 20)} {ready}")
+    print("\n實測目前方案：danwen cloud test [錄音.wav]　金鑰：danwen key set <服務商>")
     return 0
 
 
@@ -422,8 +435,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
     p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
     p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式）")
-    p = sub.add_parser("cloud", help="雲端：查看狀態、開／關、實測連線")
-    p.add_argument("action", nargs="?", choices=("status", "on", "off", "test"), default="status")
+    p = sub.add_parser("cloud", help="方案（本機／雲端）：查看、切換、實測連線")
+    p.add_argument("action", nargs="?", default="status",
+                   help="status、test、on（預設方案）、off（全部本機），或方案名稱／代號：local/A、hybrid/B、groq/C、cloudflare/D、custom/E")
     p.add_argument("wav", nargs="?", type=Path, help="test 時用來測語音辨識的錄音（預設為 1 秒靜音）")
     p = sub.add_parser("key", help="API Key：存進／查看／刪除（GNOME 鑰匙圈）")
     p.add_argument("action", nargs="?", choices=("status", "set", "delete"), default="status")
