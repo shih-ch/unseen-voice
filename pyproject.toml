@@ -1,0 +1,28 @@
+[project]
+name = "danwen"
+version = "0.1.0"
+description = "但聞人語：GNOME Wayland 地端語音聽寫"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "evdev>=1.7",
+    "numpy>=1.26",
+    "opencc>=1.1.9",
+    "pyyaml>=6.0",
+    "sherpa-onnx==1.13.8",
+    "sherpa-onnx-core==1.13.8",  # 內含 onnxruntime；PyPI 中繼資料漏列，需明確指定
+    "sounddevice>=0.5",
+]
+
+[project.scripts]
+danwen = "danwen.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

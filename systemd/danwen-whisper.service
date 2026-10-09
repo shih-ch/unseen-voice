@@ -1,0 +1,10 @@
+# 但聞人語 backend B。沒有 [Install]：不開機自動啟動，
+# 只有 danwen 選用 backend B 或執行 benchmark 時才由 danwen 啟動。
+[Unit]
+Description=但聞人語 backend B：whisper.cpp server（Vulkan）
+
+[Service]
+Type=simple
+ExecStart=@WHISPER_SERVER@ --host 127.0.0.1 --port 8178 --threads 4 --model @WHISPER_MODEL@
+Restart=on-failure
+RestartSec=5

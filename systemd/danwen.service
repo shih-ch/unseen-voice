@@ -1,0 +1,15 @@
+[Unit]
+Description=但聞人語：地端語音聽寫
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@DANWEN_BIN@ run
+Restart=on-failure
+RestartSec=5
+# 設定或權限錯誤（結束碼 78）重啟也沒用，不要一直重試
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=graphical-session.target

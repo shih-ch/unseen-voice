@@ -1,0 +1,57 @@
+# 但聞人語（danwen）設定檔
+# 這裡列出的都是預設值；只需保留要改的項目，其餘可刪除。
+# 修改後執行：systemctl --user restart danwen
+
+hotkey:
+  # evdev 按鍵名稱，可用 `danwen devices` 查看鍵盤；不要選 fcitx5 會用到的鍵
+  key: KEY_RIGHTCTRL
+  # 按住超過這個時間（毫秒）才開始錄音；短按不會觸發
+  hold_ms: 300
+
+audio:
+  # 麥克風：null＝系統預設；也可填裝置名稱的一部分或編號（`danwen devices` 列出）
+  device: null
+  sample_rate: 16000
+  # 短於這個長度的錄音直接丟棄（秒）
+  min_duration_s: 0.4
+  # 錄音上限（秒），避免鍵盤斷線時一直錄下去
+  max_duration_s: 120.0
+  # 音量低於這個值（dBFS）視為沒講話，不送辨識，避免 Whisper 幻覺
+  silence_dbfs: -50.0
+
+asr:
+  # sensevoice（A，預設，CPU）或 whisper_server（B，需 install.sh --with-whisper）
+  backend: sensevoice
+  sensevoice:
+    num_threads: 4
+    # 自動加標點、數字正規化
+    use_itn: true
+  whisper_server:
+    url: http://127.0.0.1:8178
+    language: zh
+    # 引導 Whisper 輸出繁體；也可加入常用專有名詞
+    prompt: 以下是繁體中文的句子。
+    timeout_s: 30.0
+    # server 沒在跑時自動啟動 danwen-whisper.service
+    autostart: true
+
+postprocess:
+  # OpenCC 轉換設定：s2twp（台灣用字＋用語）、s2tw（只轉字）；空字串＝不轉換
+  opencc: s2twp
+  # 替換字典路徑；null＝~/.config/danwen/replacements.yaml（不存在時用內建預設）
+  replacements: null
+
+output:
+  # 貼上後還原原本的剪貼簿
+  restore_clipboard: true
+  restore_delay_ms: 500
+
+feedback:
+  # 開始／結束錄音的提示音
+  sounds: true
+  # 發生錯誤時跳出桌面通知
+  notify_errors: true
+
+log:
+  # 是否把辨識出的文字寫進 log（預設否）
+  log_text: false
