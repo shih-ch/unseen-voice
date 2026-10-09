@@ -32,10 +32,11 @@ class Feedback:
         self._files: dict[str, Path] = {}
         if self._player:
             paths.SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
-            # 開始：上揚兩音；整理模式開始：上揚三音；結束：下降兩音
+            # 開始：上揚兩音；整理模式：上揚三音；長錄音：上揚兩音重複兩次；結束：下降兩音
             tones = {
                 "start": (660.0, 990.0),
                 "start_refine": (660.0, 880.0, 1100.0),
+                "start_long": (660.0, 990.0, 660.0, 990.0),
                 "stop": (990.0, 660.0),
             }
             for name, freqs in tones.items():
@@ -51,8 +52,8 @@ class Feedback:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
 
-    def start(self, refine: bool = False) -> None:
-        self._play("start_refine" if refine else "start")
+    def start(self, refine: bool = False, long: bool = False) -> None:
+        self._play("start_long" if long else "start_refine" if refine else "start")
 
     def stop(self) -> None:
         self._play("stop")
@@ -71,3 +72,7 @@ class Feedback:
     def notice(self, message: str) -> None:
         log.warning(message)
         self._notify(message, "normal")
+
+    def info(self, message: str) -> None:
+        log.info(message)
+        self._notify(message, "low")

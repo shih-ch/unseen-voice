@@ -33,6 +33,8 @@ SENSEVOICE = ModelSpec(
     "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
     ("model.int8.onnx", "tokens.txt"),
 )
+# 長錄音切段用的語音偵測（VAD）
+SILERO_VAD = ModelSpec("silero-vad", "csukuangfj/vad", ("silero_vad.onnx",))
 # danwen-whisper.service 以固定路徑載入這個檔案
 WHISPER_TURBO = ModelSpec(
     "whisper-large-v3-turbo",

@@ -1,5 +1,8 @@
-"""熱鍵：按住超過門檻才開始錄音；按住期間按了其他鍵就視為組合鍵並取消。
-先短按一下、很快再按住，則是整理模式（START_REFINE）。
+"""熱鍵：三種用法共用一個鍵。
+
+- 按住（超過 hold 時間）：快速模式，放開結束；按住期間按了其他鍵視為組合鍵並取消
+- 先短按一下、很快再按住：整理模式（START_REFINE）
+- 很快連按兩下：長錄音（START_LONG），不必按住；再按一下結束，Esc 取消，其他鍵不影響
 
 HoldDetector 是純邏輯、不碰裝置，方便測試；KeyboardListener 負責讀 /dev/input。
 監聽只讀取事件、不獨占裝置（不 grab），所有按鍵照常送到 GNOME 與 fcitx5。
@@ -29,6 +32,7 @@ _FIRST_BUTTON = 0x100
 class Action(enum.Enum):
     START = "start"
     START_REFINE = "start_refine"
+    START_LONG = "start_long"
     STOP = "stop"
     CANCEL = "cancel"
 
@@ -36,25 +40,39 @@ class Action(enum.Enum):
 class _State(enum.Enum):
     IDLE = "idle"
     ARMED = "armed"  # 熱鍵已按下，還沒到門檻
-    RECORDING = "recording"
-    COMBO = "combo"  # 判定為組合鍵，等熱鍵放開再回到 IDLE
+    RECORDING = "recording"  # 按住錄音中
+    COMBO = "combo"  # 判定為組合鍵（或錄音已結束），等熱鍵放開再回到 IDLE
+    LONG = "long"  # 長錄音中，熱鍵沒有按著
+    LONG_PRESSED = "long_pressed"  # 長錄音中按下熱鍵；乾淨地放開就結束
+    LONG_COMBO = "long_combo"  # 長錄音中把熱鍵當組合鍵用（例如右 Ctrl+C），不結束
+
+
+_LONG_STATES = (_State.LONG, _State.LONG_PRESSED, _State.LONG_COMBO)
 
 
 class HoldDetector:
-    def __init__(self, key: int, hold_s: float, max_s: float, double_tap_s: float = 0.0):
+    def __init__(
+        self,
+        key: int,
+        hold_s: float,
+        max_s: float,
+        double_tap_s: float = 0.0,
+        long_max_s: float = 0.0,
+    ):
         self.key = key
         self.hold_s = hold_s
         self.max_s = max_s
         self.double_tap_s = double_tap_s
+        self.long_max_s = long_max_s  # 0＝停用長錄音
         self._state = _State.IDLE
         self._since = 0.0
         self._held: set[int] = set()
         self._last_tap: float | None = None  # 上一次短按熱鍵放開的時間
-        self._refine = False
+        self._second_press = False  # 這次按下是否緊接在短按之後
 
     @property
     def recording(self) -> bool:
-        return self._state is _State.RECORDING
+        return self._state is _State.RECORDING or self._state in _LONG_STATES
 
     def deadline(self) -> float | None:
         """下一次需要呼叫 on_tick 的時間點。"""
@@ -62,56 +80,91 @@ class HoldDetector:
             return self._since + self.hold_s
         if self._state is _State.RECORDING:
             return self._since + self.max_s
+        if self._state in _LONG_STATES:
+            return self._since + self.long_max_s
         return None
+
+    def _end_long(self, action: Action) -> Action:
+        # 熱鍵還按著就等它放開，避免放開時又被當成一次短按
+        self._state = _State.COMBO if self.key in self._held else _State.IDLE
+        return action
 
     def on_key(self, code: int, value: int, now: float) -> Action | None:
         if value == KEY_REPEAT:
             return None
         if code == self.key:
-            if value == KEY_DOWN:
-                if self._state is _State.IDLE:
-                    self._refine = (
-                        self.double_tap_s > 0
-                        and self._last_tap is not None
-                        and now - self._last_tap <= self.double_tap_s
-                    )
-                    self._last_tap = None
-                    # 先按住其他鍵再按熱鍵（例如 Shift+右Ctrl）也是組合鍵
-                    self._state = _State.COMBO if self._held else _State.ARMED
-                    self._since = now
-                return None
-            previous = self._state
-            self._state = _State.IDLE
-            if previous is _State.ARMED:
-                self._last_tap = now  # 短按一下；接著很快再按住就是整理模式
-            return Action.STOP if previous is _State.RECORDING else None
+            return self._on_hotkey(value == KEY_DOWN, now)
         if code >= _FIRST_BUTTON:
             return None
-        if value == KEY_DOWN:
-            self._held.add(code)
-            self._last_tap = None
-            if self._state is _State.ARMED:
-                self._state = _State.COMBO
-            elif self._state is _State.RECORDING:
-                self._state = _State.COMBO
-                return Action.CANCEL
-        else:
+        if value != KEY_DOWN:
             self._held.discard(code)
+            return None
+        self._held.add(code)
+        self._last_tap = None
+        if self._state in _LONG_STATES:
+            if code == ecodes.KEY_ESC:
+                return self._end_long(Action.CANCEL)
+            if self._state is _State.LONG_PRESSED:
+                self._state = _State.LONG_COMBO
+            return None  # 長錄音時其他按鍵不影響（可以切換視窗、點選位置）
+        if self._state is _State.ARMED:
+            self._state = _State.COMBO
+        elif self._state is _State.RECORDING:
+            self._state = _State.COMBO
+            return Action.CANCEL
         return None
+
+    def _on_hotkey(self, down: bool, now: float) -> Action | None:
+        if down:
+            self._held.add(self.key)
+            if self._state is _State.IDLE:
+                self._second_press = (
+                    self.double_tap_s > 0
+                    and self._last_tap is not None
+                    and now - self._last_tap <= self.double_tap_s
+                )
+                self._last_tap = None
+                # 先按住其他鍵再按熱鍵（例如 Shift+右Ctrl）也是組合鍵
+                self._state = _State.COMBO if self._held - {self.key} else _State.ARMED
+                self._since = now
+            elif self._state is _State.LONG:
+                self._state = _State.LONG_PRESSED
+            return None
+        self._held.discard(self.key)
+        state = self._state
+        if state is _State.LONG_PRESSED:
+            self._state = _State.IDLE
+            return Action.STOP
+        if state is _State.LONG_COMBO:
+            self._state = _State.LONG
+            return None
+        if state is _State.LONG:
+            return None
+        self._state = _State.IDLE
+        if state is _State.ARMED:
+            if self._second_press and self.long_max_s > 0:
+                # 連按兩下：開始長錄音
+                self._state = _State.LONG
+                self._since = now
+                return Action.START_LONG
+            self._last_tap = now  # 短按一下；接著很快再按就是整理模式或長錄音
+        return Action.STOP if state is _State.RECORDING else None
 
     def on_tick(self, now: float) -> Action | None:
         if self._state is _State.ARMED and now - self._since >= self.hold_s:
             self._state = _State.RECORDING
             self._since = now
-            return Action.START_REFINE if self._refine else Action.START
+            return Action.START_REFINE if self._second_press else Action.START
         if self._state is _State.RECORDING and now - self._since >= self.max_s:
             self._state = _State.COMBO
             return Action.STOP
+        if self._state in _LONG_STATES and now - self._since >= self.long_max_s:
+            return self._end_long(Action.STOP)
         return None
 
     def reset(self) -> Action | None:
         """鍵盤被拔除等狀況：清掉狀態；正在錄音就取消。"""
-        was_recording = self._state is _State.RECORDING
+        was_recording = self.recording
         self._state = _State.IDLE
         self._held.clear()
         self._last_tap = None

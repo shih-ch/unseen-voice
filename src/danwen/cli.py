@@ -60,7 +60,7 @@ def cmd_bench(args: argparse.Namespace, cfg: config.Config) -> int:
 
 
 def cmd_download(args: argparse.Namespace, cfg: config.Config) -> int:
-    targets = {"sensevoice": [models.SENSEVOICE], "whisper_server": [models.WHISPER_TURBO]}
+    targets = {"sensevoice": [models.SENSEVOICE, models.SILERO_VAD], "whisper_server": [models.WHISPER_TURBO]}
     names = [resolve_name(b) for b in args.backend] if args.backend else ["sensevoice"]
     for name in names:
         for spec in targets[name]:

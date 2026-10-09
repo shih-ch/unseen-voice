@@ -35,6 +35,13 @@ class AudioConfig:
 
 
 @dataclass
+class LongRecordingConfig:
+    enabled: bool = True
+    max_duration_s: float = 600.0
+    refine: bool = False
+
+
+@dataclass
 class SenseVoiceConfig:
     num_threads: int = 4
     use_itn: bool = True
@@ -100,6 +107,7 @@ class LogConfig:
 class Config:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    long_recording: LongRecordingConfig = field(default_factory=LongRecordingConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     refine: RefineConfig = field(default_factory=RefineConfig)

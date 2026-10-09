@@ -153,3 +153,75 @@ def test_double_tap_disabled():
     d.on_key(HOT, KEY_UP, 0.1)
     d.on_key(HOT, KEY_DOWN, 0.2)
     assert d.on_tick(0.51) is Action.START
+
+
+def make_long() -> HoldDetector:
+    return HoldDetector(HOT, hold_s=0.3, max_s=10.0, double_tap_s=0.4, long_max_s=600.0)
+
+
+def double_tap(d: HoldDetector, t: float = 0.0):
+    d.on_key(HOT, KEY_DOWN, t)
+    d.on_key(HOT, KEY_UP, t + 0.1)
+    d.on_key(HOT, KEY_DOWN, t + 0.2)
+    return d.on_key(HOT, KEY_UP, t + 0.25)
+
+
+def test_double_tap_starts_long_and_tap_stops():
+    d = make_long()
+    assert double_tap(d) is Action.START_LONG
+    assert d.recording
+    assert d.on_tick(100.0) is None  # 不必按著，也不會因為放開而結束
+    d.on_key(HOT, KEY_DOWN, 30.0)
+    assert d.on_key(HOT, KEY_UP, 30.1) is Action.STOP
+    assert not d.recording
+    # 結束用的那一下不算短按，之後馬上按住是一般的快速模式
+    d.on_key(HOT, KEY_DOWN, 30.3)
+    assert d.on_tick(30.61) is Action.START
+
+
+def test_long_ignores_other_keys_but_esc_cancels():
+    d = make_long()
+    double_tap(d)
+    for key in (ecodes.KEY_A, ecodes.KEY_SPACE, ecodes.KEY_LEFTALT, ecodes.KEY_TAB):
+        assert d.on_key(key, KEY_DOWN, 5.0) is None
+        d.on_key(key, KEY_UP, 5.1)
+    assert d.recording
+    assert d.on_key(ecodes.KEY_ESC, KEY_DOWN, 6.0) is Action.CANCEL
+    assert not d.recording
+
+
+def test_hotkey_used_in_combo_during_long_does_not_stop():
+    d = make_long()
+    double_tap(d)
+    d.on_key(HOT, KEY_DOWN, 5.0)
+    d.on_key(ecodes.KEY_C, KEY_DOWN, 5.05)  # 右 Ctrl+C 複製東西
+    d.on_key(ecodes.KEY_C, KEY_UP, 5.1)
+    assert d.on_key(HOT, KEY_UP, 5.2) is None
+    assert d.recording
+
+
+def test_long_max_duration():
+    d = make_long()
+    double_tap(d)
+    assert d.on_tick(600.3) is Action.STOP
+    assert not d.recording
+
+
+def test_tap_then_hold_is_still_refine_when_long_enabled():
+    d = make_long()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(HOT, KEY_DOWN, 0.2)
+    assert d.on_tick(0.51) is Action.START_REFINE
+
+
+def test_long_disabled_double_tap_does_nothing():
+    d = make_dt()  # long_max_s=0
+    assert double_tap(d) is None
+    assert not d.recording
+
+
+def test_reset_cancels_long():
+    d = make_long()
+    double_tap(d)
+    assert d.reset() is Action.CANCEL

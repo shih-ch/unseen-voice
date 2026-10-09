@@ -21,6 +21,14 @@ audio:
   # 音量低於這個值（dBFS）視為沒講話，不送辨識，避免 Whisper 幻覺
   silence_dbfs: -50.0
 
+long_recording:
+  # 很快連按兩下熱鍵開始長錄音（不必按著），再按一下結束、Esc 取消；需要 hotkey.double_tap_ms 大於 0
+  enabled: true
+  # 長錄音上限（秒）
+  max_duration_s: 600.0
+  # 長錄音結束後是否交給整理模式（較長的內容整理會比較久）
+  refine: false
+
 asr:
   # sensevoice（A，預設，CPU）或 whisper_server（B，需 install.sh --with-whisper）
   backend: sensevoice

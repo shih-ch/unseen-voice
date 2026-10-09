@@ -39,6 +39,7 @@ class Daemon:
             cfg.hotkey.hold_ms / 1000,
             cfg.audio.max_duration_s,
             cfg.hotkey.double_tap_ms / 1000,
+            cfg.long_recording.max_duration_s if cfg.long_recording.enabled else 0.0,
         )
         self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
         self.history = (
@@ -59,7 +60,11 @@ class Daemon:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: self._stop.set())
         listener = KeyboardListener(self.detector, self._on_action, ignore_names={VKBD_NAME})
-        log.info("就緒：按住 %s 說話%s", self.cfg.hotkey.key, "；先短按一下再按住＝整理模式" if self.refiner else "")
+        log.info(
+            "就緒：按住 %s 說話%s%s", self.cfg.hotkey.key,
+            "；先短按一下再按住＝整理模式" if self.refiner else "",
+            "；連按兩下＝長錄音" if self.detector.long_max_s > 0 and self.detector.double_tap_s > 0 else "",
+        )
         try:
             listener.run(self._stop)
         finally:
@@ -71,14 +76,18 @@ class Daemon:
 
     def _on_action(self, action: Action) -> None:
         now = time.monotonic()
-        if action in (Action.START, Action.START_REFINE):
-            self._refining = action is Action.START_REFINE and self.refiner is not None
+        if action in (Action.START, Action.START_REFINE, Action.START_LONG):
+            long = action is Action.START_LONG
+            wants_refine = action is Action.START_REFINE or (long and self.cfg.long_recording.refine)
+            self._refining = wants_refine and self.refiner is not None
             try:
                 self.recorder.start()
             except Exception as e:
                 self.feedback.error(f"無法開啟麥克風：{e}")
                 return
-            self.feedback.start(refine=self._refining)
+            self.feedback.start(refine=self._refining, long=long)
+            if long:
+                self.feedback.info("長錄音中：再按一下熱鍵結束，Esc 取消")
             if self._refining:
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
@@ -87,7 +96,7 @@ class Daemon:
             self._jobs.put((audio, now, self._refining))
         elif action is Action.CANCEL:
             self.recorder.stop()
-            log.info("按住期間按了其他鍵，取消錄音")
+            log.info("錄音已取消（組合鍵或 Esc）")
 
     def _worker(self) -> None:
         while (job := self._jobs.get()) is not None:
