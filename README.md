@@ -73,6 +73,21 @@ refine:
 - 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
 
+## 歷史紀錄
+
+保留最近 20 次聽寫的文字（`~/.local/state/danwen/history/`，只有你自己能讀；預設**不存錄音**）。
+
+```bash
+danwen history                    # 列出（新的在前）
+danwen history show 12            # 看第 12 筆的辨識原文與貼上的文字
+danwen history copy 12            # 複製到剪貼簿
+danwen history redo 12 -m Email   # 不用重錄，換一張小紙條重新整理，結果複製到剪貼簿
+danwen history redo               # 不指定編號＝最新一筆，用目前的小紙條
+danwen history clear              # 全部清除
+```
+
+設定 `history.size: 0` 可完全停用；`history.keep_audio: true` 會一併保存錄音，可用 `danwen history play 編號` 重聽。
+
 ## 設定
 
 `~/.config/danwen/config.yaml`（每個項目的說明都在檔案裡），修改後：
@@ -97,6 +112,7 @@ danwen devices            # 列出麥克風與鍵盤
 danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
 danwen dict               # 替換字典：列出、新增、刪除
+danwen history            # 歷史紀錄：列出最近 20 次聽寫
 danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A
 danwen download -b B      # 預先下載模型
@@ -158,6 +174,7 @@ uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
 | `src/danwen/asr/` | backend 介面與兩種實作 |
 | `src/danwen/postprocess.py` | 去標籤、OpenCC、替換字典 |
 | `src/danwen/refine.py` | 整理模式：小紙條、Ollama／OpenAI 相容 API、防呆 |
+| `src/danwen/history.py` | 歷史紀錄（JSON，檔案鎖，只有自己能讀） |
 | `src/danwen/data/prompts/` | 內建小紙條 |
 | `src/danwen/output.py` | 剪貼簿與虛擬鍵盤 |
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |

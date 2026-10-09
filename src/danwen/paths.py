@@ -19,6 +19,7 @@ REPLACEMENTS_FILE = CONFIG_DIR / "replacements.yaml"
 MODELS_DIR = CACHE_DIR / "models"
 SOUNDS_DIR = CACHE_DIR / "sounds"
 LOG_FILE = STATE_DIR / "danwen.log"
+HISTORY_DIR = STATE_DIR / "history"
 
 # 套件內附的預設檔（danwen init-config 會複製到 CONFIG_DIR）
 DATA_DIR = Path(__file__).parent / "data"

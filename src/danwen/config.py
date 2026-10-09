@@ -86,6 +86,12 @@ class FeedbackConfig:
 
 
 @dataclass
+class HistoryConfig:
+    size: int = 20
+    keep_audio: bool = False
+
+
+@dataclass
 class LogConfig:
     log_text: bool = False
 
@@ -99,6 +105,7 @@ class Config:
     refine: RefineConfig = field(default_factory=RefineConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
 

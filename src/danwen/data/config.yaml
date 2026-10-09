@@ -67,6 +67,12 @@ feedback:
   # 發生錯誤時跳出桌面通知
   notify_errors: true
 
+history:
+  # 保留最近幾次聽寫的文字（只有你自己能讀）；0＝不保留。用 `danwen history` 查看、重新整理
+  size: 20
+  # 是否一併保留錄音（預設否）；開啟後可用 `danwen history play` 重聽
+  keep_audio: false
+
 log:
   # 是否把辨識出的文字寫進 log（預設否）
   log_text: false

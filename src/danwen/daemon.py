@@ -15,6 +15,7 @@ from .asr import ASRUnavailable, create_backend
 from .audio import Recorder, dbfs
 from .config import Config, ConfigError
 from .feedback import Feedback
+from .history import History
 from .hotkey import Action, HoldDetector, KeyboardListener, key_code
 from .output import VKBD_NAME, Paster
 from .postprocess import PostProcessor
@@ -40,6 +41,9 @@ class Daemon:
             cfg.hotkey.double_tap_ms / 1000,
         )
         self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
+        self.history = (
+            History(size=cfg.history.size, keep_audio=cfg.history.keep_audio) if cfg.history.size > 0 else None
+        )
         self.paster: Paster | None = None
         self._refining = False
         self._jobs: queue.Queue[tuple[np.ndarray, float, bool] | None] = queue.Queue()
@@ -108,15 +112,17 @@ class Daemon:
         t0 = time.monotonic()
         raw = self.backend.transcribe(audio, sr)
         t1 = time.monotonic()
-        text = self.post(raw)
+        text = plain = self.post(raw)
         t2 = time.monotonic()
         mode = ""
+        refined_with: str | None = None
         if refine and text:
             mode = current_mode(self.cfg.refine.mode)
             try:
                 # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
                 terms = self.post.replacements.terms()
                 text = self.post(self.refiner.refine(text, mode, terms))
+                refined_with = mode
             except (RefineError, ConfigError) as e:
                 self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
         t3 = time.monotonic()
@@ -130,3 +136,11 @@ class Daemon:
         )
         if self.cfg.log.log_text:
             log.info("文字：%s", text)
+        if self.history and text:
+            try:
+                self.history.add(
+                    duration_s=duration, backend=self.backend.name, raw=plain, text=text,
+                    mode=refined_with, audio=audio, sample_rate=sr,
+                )
+            except OSError:
+                log.exception("寫入歷史紀錄失敗")

@@ -1,4 +1,4 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | history | init-config"""
 
 from __future__ import annotations
 
@@ -137,14 +137,19 @@ def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def _postprocessor(cfg: config.Config):
+    from .postprocess import PostProcessor
+
+    replacements = cfg.postprocess.replacements
+    return PostProcessor(cfg.postprocess.opencc, Path(replacements).expanduser() if replacements else None)
+
+
 def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     import time
 
-    from .postprocess import PostProcessor
     from .refine import RefineError, Refiner, current_mode
 
-    replacements = cfg.postprocess.replacements
-    post = PostProcessor(cfg.postprocess.opencc, Path(replacements).expanduser() if replacements else None)
+    post = _postprocessor(cfg)
     refiner = Refiner(cfg.refine)
     mode = args.mode or current_mode(cfg.refine.mode)
     text = post(args.text)
@@ -192,6 +197,80 @@ def cmd_dict(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def _pad(text: str, width: int) -> str:
+    """依顯示寬度補空白（中文字佔兩格），讓表格對齊。"""
+    import unicodedata
+
+    shown = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+    return text + " " * max(width - shown, 0)
+
+
+def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
+    from .history import History
+    from .output import Clipboard
+    from .refine import RefineError, Refiner, current_mode
+
+    history = History(size=cfg.history.size, keep_audio=cfg.history.keep_audio)
+    try:
+        if args.action == "list":
+            entries = history.entries()
+            if not entries:
+                print("還沒有任何歷史紀錄" + ("（history.size 為 0，未啟用）" if cfg.history.size <= 0 else ""))
+                return 0
+            for e in entries:
+                when = e.time[5:16].replace("T", " ")
+                kind = f"整理:{e.mode}" if e.mode else "快速"
+                preview = e.text.replace("\n", " ⏎ ")
+                preview = preview[:40] + "…" if len(preview) > 40 else preview
+                print(f"#{e.id:<4} {when}  {_pad(kind, 14)} {e.duration_s:5.1f}s  {preview}")
+            print("\n查看：danwen history show 編號｜複製：danwen history copy 編號｜"
+                  "換小紙條重新整理：danwen history redo 編號 -m 小紙條")
+            return 0
+        if args.action == "clear":
+            print(f"已清除 {history.clear()} 筆")
+            return 0
+        entry = history.get(args.id)
+        if args.action == "show":
+            print(f"編號：#{entry.id}" + (f"（由 #{entry.redo_of} 重新整理）" if entry.redo_of else ""))
+            print(f"時間：{entry.time}　長度：{entry.duration_s}s　辨識：{entry.backend}")
+            print(f"模式：{'整理（' + entry.mode + '）' if entry.mode else '快速'}")
+            print(f"錄音：{history.audio_path(entry) or '未保存（history.keep_audio 預設關閉）'}")
+            print(f"\n── 辨識結果（整理前）──\n{entry.raw}\n\n── 貼上的文字 ──\n{entry.text}")
+        elif args.action == "copy":
+            Clipboard.set_text(entry.text)
+            print(f"已複製第 {entry.id} 筆到剪貼簿")
+        elif args.action == "play":
+            audio = history.audio_path(entry)
+            player = next((p for p in ("pw-play", "paplay", "aplay") if shutil.which(p)), None)
+            if audio is None or not audio.exists():
+                print("這筆沒有保存錄音（要保存請在設定開啟 history.keep_audio）", file=sys.stderr)
+                return 1
+            if player is None:
+                print("找不到播放程式（pw-play、paplay 或 aplay）", file=sys.stderr)
+                return 1
+            import subprocess
+
+            subprocess.run([player, str(audio)], check=False)
+        elif args.action == "redo":
+            post = _postprocessor(cfg)
+            mode = args.mode or current_mode(cfg.refine.mode)
+            result = post(Refiner(cfg.refine).refine(entry.raw, mode, post.replacements.terms()))
+            Clipboard.set_text(result)
+            new = history.add(
+                duration_s=entry.duration_s, backend=entry.backend, raw=entry.raw, text=result,
+                mode=mode, redo_of=entry.id,
+            )
+            saved = f"，存成第 {new.id} 筆" if new else ""
+            print(f"[{mode}] 已複製到剪貼簿{saved}：\n{result}")
+    except KeyError as e:
+        print(e.args[0], file=sys.stderr)
+        return 1
+    except RefineError as e:
+        print(f"整理失敗：{e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
@@ -231,6 +310,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
     p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")
+    p = sub.add_parser("history", help="歷史紀錄：列出、查看、複製、重聽、換小紙條重新整理")
+    p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
+    p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
+    p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式）")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)
@@ -250,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         "mode": cmd_mode,
         "refine": cmd_refine,
         "dict": cmd_dict,
+        "history": cmd_history,
         "init-config": cmd_init_config,
     }[command]
     try:

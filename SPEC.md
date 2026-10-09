@@ -82,8 +82,10 @@
 - 不做：語音指令（ZeroType 有，但讓 LLM 執行系統動作有 prompt injection 風險）
 
 ## 路線圖（對照保哥 ZeroType 的差距，依序進行）
-1. 字典帶進整理：替換字典裡的正確寫法交給 LLM 參考；`danwen dict` 新增／列出詞條；新增 Slack、Email 小紙條
-2. 歷史紀錄：最近 N 筆（文字與錄音），可換小紙條重新整理而不必重錄
+1. ✅ 字典帶進整理：替換字典裡的正確寫法交給 LLM 參考；`danwen dict` 新增／列出詞條；新增 Slack、Email 小紙條
+2. ✅ 歷史紀錄：最近 20 筆文字（錄音預設不存），`danwen history` 列出／查看／複製／重聽，
+   `redo` 不必重錄即可換小紙條重新整理；資料為 `~/.local/state/danwen/history/history.json`（0600），
+   D-Bus 介面延到第 5 步與 extension 一起做（屆時才有使用者可測試）
 3. 長錄音模式：按一下開始、再按一下結束
 4. 上下文：剪貼簿、選取文字一併交給 LLM（選用，預設關閉）
 5. **GNOME Shell extension**：頂列狀態圖示（待命／錄音／整理中）、錄音時的浮動提示、
