@@ -2,13 +2,25 @@
 
 > 空山不見人，但聞人語響。——王維〈鹿柴〉
 
-GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自動貼上繁體中文**。全程離線，不需要任何 API Key。
+GNOME Wayland 上的語音聽寫：**按住右 Ctrl 說話，放開後自動貼上繁體中文**。
+
+- **快速模式**：語音辨識在本機（SenseVoice，CPU），全程離線，放開到貼上約 0.3 秒
+- **整理模式**：再交給 LLM 依「小紙條」刪贅詞、條列、改寫成 Email／Slack，或翻譯成英文、日文、簡體中文。
+  可用本機 Ollama（離線）或雲端；預設方案 B 用 Groq（需自備免費的 API Key，存在 GNOME 鑰匙圈）
+- 不動 fcitx5／IBus 設定，可以跟注音輸入法並用；`uninstall.sh` 可完整移除
+- 選用的 GNOME Shell extension：頂列圖示與選單、錄音時的畫面提示、滾輪切換小紙條
+
+<img src="docs/screenshots/overlay-long.png" width="500" alt="錄音時畫面上方的提示：長錄音 0:03，再按一下右 Ctrl 結束，Esc 取消">
 
 規格與設計決策見 [SPEC.md](SPEC.md)。
 
 ## 安裝
 
+需要 Ubuntu 24.04（GNOME 46、Wayland）與 [uv](https://docs.astral.sh/uv/)：
+
 ```bash
+git clone https://github.com/shih-ch/unseen-voice.git
+cd unseen-voice
 ./install.sh                    # 只裝 backend A（SenseVoice，CPU）
 ./install.sh --with-whisper     # 另外編譯 whisper.cpp（Vulkan），啟用 backend B
 ./install.sh --with-extension   # 另外安裝 GNOME Shell extension（頂列圖示、選單、錄音提示）
@@ -202,6 +214,14 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 
 `./install.sh --with-extension` 安裝，登出再登入後出現在頂列：
 
+<p>
+  <img src="docs/screenshots/menu-translate.png" width="400" alt="頂列選單：翻譯成日文">
+  <img src="docs/screenshots/menu-modes.png" width="400" alt="頂列選單：切換小紙條">
+</p>
+<img src="docs/screenshots/osd-switch.png" width="273" alt="滑鼠在圖示上滾動滾輪切換小紙條時的提示">
+
+（截圖由 `SHOTS=docs/screenshots dev/headless-check.sh` 在隔離的 GNOME Shell 裡產生，內容是假資料）
+
 - 圖示：待命、錄音（紅）、辨識整理中（黃「…」）、danwen 未執行（灰）
 - 選單：開始／結束／取消長錄音、切換小紙條、翻譯成（英文、日文、簡體中文）、最近 5 筆（點一下複製）、
   換小紙條重新整理最新一筆（翻譯展開成各語言，可把同一句翻成好幾種）、開啟設定檔
@@ -284,3 +304,7 @@ dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取
 | `src/danwen/output.py` | 剪貼簿與虛擬鍵盤 |
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |
 | `src/danwen/bench.py` | benchmark |
+
+## 授權
+
+[MIT](LICENSE)

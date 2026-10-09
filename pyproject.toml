@@ -3,6 +3,7 @@ name = "danwen"
 version = "0.1.0"
 description = "但聞人語：GNOME Wayland 地端語音聽寫"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "dbus-fast>=2.0",
@@ -15,6 +16,9 @@ dependencies = [
     "sherpa-onnx-core==1.13.8",  # 內含 onnxruntime；PyPI 中繼資料漏列，需明確指定
     "sounddevice>=0.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/shih-ch/unseen-voice"
 
 [project.scripts]
 danwen = "danwen.cli:main"
