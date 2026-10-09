@@ -68,12 +68,25 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 
 ```bash
 systemctl --user disable --now danwen   # 只是暫停，隨時可再 enable
+./uninstall.sh --dry-run                # 先看會做哪些事，不做任何變更
 ./uninstall.sh                          # 逐項詢問並還原
 ./uninstall.sh -y                       # 全部移除，含設定檔與當初安裝的套件
 ```
 
-uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh 做過的變更，
-結束時同樣會比對輸入法設定並印出結果。
+uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh 做過的變更：
+
+| install.sh 做的事 | uninstall.sh 怎麼還原 |
+|---|---|
+| apt 安裝缺少的套件（含 apt 自動帶進來的相依套件） | 只移除這些套件；apt 會先列出清單再詢問 |
+| 加入 input 群組（原本不在才加） | 移出群組（原本就在則不動） |
+| `/etc/udev/rules.d/70-danwen-uinput.rules` | 刪除 |
+| `uv tool install danwen` | `uv tool uninstall danwen` |
+| `danwen.service`、`danwen-whisper.service` | 停止、停用、刪除 |
+| 設定檔 `~/.config/danwen` | 詢問後刪除（預設保留，可能有你的替換字典） |
+| 模型 `~/.cache/danwen`、whisper.cpp `~/.local/share/danwen`、紀錄 `~/.local/state/danwen` | 刪除 |
+
+結束時同樣會比對輸入法設定並印出結果。共用的快取（`~/.cache/uv`、`~/.cache/mesa_shader_cache`）
+其他程式也在用，不會刪除，內容會自動汰換。
 
 ## 開發
 

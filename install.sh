@@ -40,6 +40,11 @@ record() {
     grep -qxF "$1" "$MANIFEST" 2>/dev/null || echo "$1" >>"$MANIFEST"
 }
 
+# 目前已安裝（狀態 ii）的套件清單，排序後供 comm 比對
+installed_packages() {
+    dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' | awk '$1 == "ii" {print $2}' | sort
+}
+
 # 輸入法相關檔案的雜湊，只讀不寫。cached_layouts 是 fcitx5 自己產生的快取，不列入。
 ime_snapshot() {
     {
@@ -67,7 +72,8 @@ touch "$MANIFEST"
 say "檢查系統套件"
 PKGS=(xclip libportaudio2 libnotify-bin)
 if [ "$WITH_WHISPER" = 1 ]; then
-    PKGS+=(git cmake build-essential libvulkan-dev glslc)
+    # whisper.cpp 的 Vulkan 版需要 glslc 與 SPIRV-Headers 的 CMake 設定
+    PKGS+=(git cmake build-essential libvulkan-dev glslc spirv-headers)
 fi
 MISSING=()
 for p in "${PKGS[@]}"; do
@@ -77,8 +83,12 @@ for p in "${PKGS[@]}"; do
 done
 if [ "${#MISSING[@]}" -gt 0 ]; then
     info "需要安裝：${MISSING[*]}"
+    PKGS_BEFORE="$(installed_packages)"
     sudo apt-get install -y "${MISSING[@]}"
-    for p in "${MISSING[@]}"; do record "apt=$p"; done
+    # 比對安裝前後，連同 apt 自動帶進來的相依套件一起記錄，uninstall.sh 才能完整移除
+    NEW_PKGS="$(comm -13 <(echo "$PKGS_BEFORE") <(installed_packages))"
+    for p in $NEW_PKGS; do record "apt=$p"; done
+    info "新安裝的套件（含相依）：$(echo "$NEW_PKGS" | tr '\n' ' ')"
 else
     info "都已安裝"
 fi
