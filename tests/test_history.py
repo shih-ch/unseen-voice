@@ -175,3 +175,25 @@ def test_daemon_state_returns_to_idle_after_processing(tmp_path, fake_llm):
     d._set_state("recording", "long")
     d._finish_processing()  # 正在錄下一段時不能被改成 idle
     assert d.state == "recording" and d.kind == "long"
+
+
+class StubRecorder:
+    def start(self):
+        pass
+
+    def stop(self):
+        return np.zeros(0, np.float32)
+
+
+@pytest.mark.parametrize("overlay, expect_notice", [(True, False), (False, True)])
+def test_long_recording_notice_only_without_overlay(tmp_path, fake_llm, overlay, expect_notice):
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d.recorder = StubRecorder()
+    notices = []
+    d.feedback.info = notices.append
+    d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: overlay, "notify_state": lambda self: None})()
+    from danwen.hotkey import Action
+
+    d._on_action(Action.START_LONG)
+    assert d.state == "recording" and d.kind == "long"
+    assert bool(notices) is expect_notice

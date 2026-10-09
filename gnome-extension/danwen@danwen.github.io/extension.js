@@ -1,8 +1,9 @@
-// 但聞人語（danwen）GNOME Shell extension：頂列狀態圖示與選單。
+// 但聞人語（danwen）GNOME Shell extension：頂列狀態圖示與選單，以及錄音時畫面上方的浮動提示。
 //
 // 透過 session D-Bus（io.github.danwen）與 danwen 常駐程式溝通，本身不錄音也不辨識。
 // danwen 沒在跑時圖示變灰，選單可以啟動它。
 
+import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -15,6 +16,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const APP_NAME = '但聞人語';
 const BUS_NAME = 'io.github.danwen';
+// 持有這個名稱表示畫面上會顯示錄音提示，danwen 就不再另外跳系統通知
+const OVERLAY_BUS_NAME = 'io.github.danwen.ShellOverlay';
 const OBJECT_PATH = '/io/github/danwen';
 const IFACE_XML = `
 <node>
@@ -22,6 +25,7 @@ const IFACE_XML = `
     <property name="State" type="s" access="read"/>
     <property name="Kind" type="s" access="read"/>
     <property name="Mode" type="s" access="read"/>
+    <property name="Hotkey" type="s" access="read"/>
     <method name="ListModes"><arg type="a(ss)" direction="out"/></method>
     <method name="SetMode"><arg type="s" name="name" direction="in"/></method>
     <method name="GetHistory">
@@ -50,7 +54,19 @@ const ICONS = {
     recording: 'audio-input-microphone-symbolic',
     processing: 'content-loading-symbolic',
 };
+const KEY_NAMES = {
+    KEY_RIGHTCTRL: '右 Ctrl', KEY_LEFTCTRL: '左 Ctrl', KEY_RIGHTALT: '右 Alt', KEY_LEFTALT: '左 Alt',
+    KEY_RIGHTSHIFT: '右 Shift', KEY_LEFTSHIFT: '左 Shift', KEY_RIGHTMETA: '右 Super', KEY_LEFTMETA: '左 Super',
+    KEY_CAPSLOCK: 'Caps Lock', KEY_SCROLLLOCK: 'Scroll Lock', KEY_PAUSE: 'Pause', KEY_COMPOSE: 'Menu',
+};
 const HISTORY_ITEMS = 5;
+
+// 把 evdev 按鍵名稱轉成好讀的名字（KEY_F9 → F9）
+function keyName(evdevName) {
+    if (!evdevName)
+        return '熱鍵';
+    return KEY_NAMES[evdevName] ?? evdevName.replace(/^KEY_/, '');
+}
 const PREVIEW_CHARS = 28;
 
 function preview(text) {
@@ -63,6 +79,120 @@ function errorMessage(error) {
         Gio.DBusError.strip_remote_error(error);
     return error.message;
 }
+
+function formatElapsed(microseconds) {
+    const total = Math.floor(microseconds / 1_000_000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+// 錄音與辨識時顯示在畫面上方中央的小提示；待命時淡出隱藏。不接收滑鼠，不影響底下的視窗。
+const DanwenOsd = GObject.registerClass(
+class DanwenOsd extends St.BoxLayout {
+    _init() {
+        super._init({style_class: 'danwen-osd', reactive: false, visible: false, opacity: 0});
+        this._dot = new St.Label({style_class: 'danwen-osd-dot', y_align: Clutter.ActorAlign.CENTER});
+        this._label = new St.Label({style_class: 'danwen-osd-label', y_align: Clutter.ActorAlign.CENTER});
+        this.add_child(this._dot);
+        this.add_child(this._label);
+        this._state = 'idle';
+        this._since = 0;
+        this._timerId = 0;
+        Main.layoutManager.uiGroup.add_child(this);
+    }
+
+    update(state, kind, mode, hotkey) {
+        this._hotkey = hotkey;
+        if (state === 'recording' && this._state !== 'recording')
+            this._since = GLib.get_monotonic_time();
+        this._state = state;
+        this._kind = kind;
+        this._mode = mode;
+        if (state === 'recording') {
+            if (!this._timerId) {
+                this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
+                    this._render();
+                    return GLib.SOURCE_CONTINUE;
+                });
+            }
+        } else {
+            this._stopTimer();
+        }
+        if (state === 'recording' || state === 'processing') {
+            this._render();
+            this._show();
+        } else {
+            this._hide();
+        }
+    }
+
+    _render() {
+        const recording = this._state === 'recording';
+        this._dot.text = recording ? '●' : '…';
+        if (recording)
+            this._dot.remove_style_class_name('processing');
+        else
+            this._dot.add_style_class_name('processing');
+
+        const elapsed = formatElapsed(GLib.get_monotonic_time() - this._since);
+        if (!recording)
+            this._label.text = this._kind === 'refine' ? `整理中（${this._mode}）` : '辨識中';
+        else if (this._kind === 'long')
+            this._label.text = `長錄音 ${elapsed}　·　再按一下 ${keyName(this._hotkey)} 結束，Esc 取消`;
+        else if (this._kind === 'refine')
+            this._label.text = `錄音中 ${elapsed}　·　整理：${this._mode}`;
+        else
+            this._label.text = `錄音中 ${elapsed}`;
+        this._position();
+    }
+
+    // 放在目前工作中的螢幕上方中央；頂列在上方時排在它下面
+    _position() {
+        const monitor = Main.layoutManager.currentMonitor ?? Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return;
+        const panelBox = Main.layoutManager.panelBox;
+        const panelOnTop = panelBox.visible && Math.abs(panelBox.y - monitor.y) < 2 &&
+            panelBox.x >= monitor.x && panelBox.x < monitor.x + monitor.width;
+        const [, width] = this.get_preferred_width(-1);
+        this.set_position(
+            Math.floor(monitor.x + (monitor.width - width) / 2),
+            monitor.y + (panelOnTop ? panelBox.height : 0) + 12);
+    }
+
+    _show() {
+        if (this.visible && this.opacity === 255)
+            return;
+        this.remove_all_transitions();
+        this.visible = true;
+        this.ease({opacity: 255, duration: 150, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
+    }
+
+    _hide() {
+        if (!this.visible)
+            return;
+        this.remove_all_transitions();
+        this.ease({
+            opacity: 0,
+            duration: 200,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => {
+                this.visible = false;
+            },
+        });
+    }
+
+    _stopTimer() {
+        if (this._timerId) {
+            GLib.Source.remove(this._timerId);
+            this._timerId = 0;
+        }
+    }
+
+    destroy() {
+        this._stopTimer();
+        super.destroy();
+    }
+});
 
 const DanwenIndicator = GObject.registerClass(
 class DanwenIndicator extends PanelMenu.Button {
@@ -77,6 +207,9 @@ class DanwenIndicator extends PanelMenu.Button {
         this._generation = 0;
         this._modeItems = new Map();
         this._cancellable = new Gio.Cancellable();
+        this._osd = new DanwenOsd();
+        this._overlayNameId = Gio.bus_own_name(Gio.BusType.SESSION, OVERLAY_BUS_NAME,
+            Gio.BusNameOwnerFlags.NONE, null, null, null);
 
         // GNOME 不會打開空的選單，所以骨架一開始就建好；清單在打開時才向 danwen 讀取
         this._buildMenu();
@@ -158,6 +291,10 @@ class DanwenIndicator extends PanelMenu.Button {
         }
 
         const running = this._running;
+        if (running)
+            this._osd.update(this._proxy.State, this._proxy.Kind, this._proxy.Mode, this._proxy.Hotkey);
+        else
+            this._osd.update('offline', '', '', '');
         for (const part of [this._modeMenu, this._historyHeader, this._history.actor])
             part.visible = running;
         if (!running)
@@ -275,6 +412,9 @@ class DanwenIndicator extends PanelMenu.Button {
 
     destroy() {
         this._cancellable.cancel();
+        Gio.bus_unown_name(this._overlayNameId);
+        this._osd.destroy();
+        this._osd = null;
         if (this._proxy) {
             for (const id of this._proxyIds)
                 this._proxy.disconnect(id);

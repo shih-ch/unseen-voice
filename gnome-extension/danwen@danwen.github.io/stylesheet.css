@@ -14,3 +14,22 @@
 .danwen-status {
   font-weight: bold;
 }
+
+/* 錄音時畫面上方的浮動提示 */
+.danwen-osd {
+  background-color: rgba(30, 30, 30, 0.88);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 6px 16px;
+  spacing: 8px;
+  font-size: 11pt;
+}
+
+.danwen-osd-dot {
+  color: #e01b24;
+  font-weight: bold;
+}
+
+.danwen-osd-dot.processing {
+  color: #e5a50a;
+}

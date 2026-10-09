@@ -16,6 +16,8 @@ pytestmark = pytest.mark.skipif(not os.environ.get("DBUS_SESSION_BUS_ADDRESS"), 
 
 
 class StubDaemon:
+    cfg = type("Cfg", (), {"hotkey": type("Hotkey", (), {"key": "KEY_RIGHTCTRL"})})
+
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
         self.calls: list[str] = []
@@ -75,6 +77,7 @@ def test_properties_and_methods(service):
         bus, iface, _ = await connect(name)
         assert await iface.get_state() == "idle"
         assert await iface.get_mode() == "日常"
+        assert await iface.get_hotkey() == "KEY_RIGHTCTRL"
         assert [list(m) for m in await iface.call_list_modes()] == [["日常", "預設"], ["英文", "翻譯"]]
         await iface.call_set_mode("英文")
         assert await iface.get_mode() == "英文"
@@ -131,3 +134,23 @@ def test_second_instance_is_refused(service):
     name, _, _ = service
     with pytest.raises(AlreadyRunning):
         DBusService(StubDaemon(), bus_name=name).start()
+
+
+def test_overlay_presence_follows_name_owner():
+    name = f"io.github.danwen.Test{os.getpid()}b"
+    overlay = f"io.github.danwen.TestOverlay{os.getpid()}"
+    svc = DBusService(StubDaemon(), bus_name=name, overlay_name=overlay)
+    svc.start()
+    try:
+        assert svc.overlay_present() is False
+
+        async def own_and_check():
+            bus = await MessageBus(bus_type=BusType.SESSION).connect()
+            await bus.request_name(overlay)
+            present = await asyncio.get_running_loop().run_in_executor(None, svc.overlay_present)
+            bus.disconnect()
+            return present
+
+        assert asyncio.run(own_and_check()) is True
+    finally:
+        svc.stop()

@@ -16,7 +16,14 @@ from danwen.config import ConfigError
 from danwen.dbus_service import DBusService
 
 
+class FakeConfig:
+    class hotkey:  # 模仿 Config.hotkey.key
+        key = "KEY_RIGHTCTRL"
+
+
 class FakeDaemon:
+    cfg = FakeConfig
+
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
         self.manual = threading.Event()  # 由選單控制錄音時停止自動切換
@@ -95,7 +102,10 @@ def main():
     print("假的 danwen 已在 D-Bus 上就緒", flush=True)
     if os.environ.get("DANWEN_FAKE_CYCLE") != "1":
         threading.Event().wait()  # 不自動切換，只回應選單操作
-    cycle = [("idle", "", 6), ("recording", "fast", 3), ("processing", None, 2)]
+    cycle = [
+        ("idle", "", 4), ("recording", "fast", 4), ("processing", None, 2),
+        ("idle", "", 4), ("recording", "refine", 5), ("processing", None, 3),
+    ]
     n = 0
     while True:
         for state, kind, seconds in cycle:

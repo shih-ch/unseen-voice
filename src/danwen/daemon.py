@@ -133,7 +133,8 @@ class Daemon:
                 return
             self._set_state("recording", "long" if long else "refine" if self._refining else "fast")
             self.feedback.start(refine=self._refining, long=long)
-            if long:
+            # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
+            if long and not (self.dbus and self.dbus.overlay_present()):
                 self.feedback.info("長錄音中：再按一下熱鍵結束，Esc 取消")
             if self._refining:
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
