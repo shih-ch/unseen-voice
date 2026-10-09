@@ -74,7 +74,7 @@
 參考保哥 ZeroType「辨識 → LLM 依提示詞整理」的兩段式設計，但預設全程在本機。
 - 觸發：先短按一下熱鍵、0.4 秒內再按住（`hotkey.double_tap_ms`，0＝停用）；不佔新鍵，與 fcitx5 不衝突。
   單純按住仍是快速模式（不經 LLM）
-- 「小紙條」：`~/.config/danwen/prompts/*.yaml`（system＋示範例句），內建 日常／會議記錄／英文；
+- 「小紙條」：`~/.config/danwen/prompts/*.yaml`（system＋示範例句），內建 日常／會議記錄／翻譯；
   `danwen mode` 切換，狀態存在 `~/.local/state/danwen/mode`，可綁 GNOME 自訂快捷鍵
 - LLM：預設本機 Ollama `qwen3:4b-instruct-2507-q4_K_M`（原生 API，可設 keep_alive）；
   `provider: openai` 可改接任何 OpenAI 相容服務（雲端為使用者自選，非預設）
@@ -159,9 +159,23 @@
   以 GNOME 內建的浮動提示（Main.osdWindowManager）顯示目前小紙條
 - `danwen mode next／prev`；D-Bus `CycleMode(step)`
 - `danwen shortcuts install／remove／status`：新增 GNOME 自訂快捷鍵 Super+Alt+M（下一張）、Super+Alt+1～5
-  （日常、會議記錄、Email、Slack、英文）；路徑以 danwen- 開頭，只動自己的項目；
+  （日常、會議記錄、Email、Slack、翻譯）、Super+Alt+T（翻譯換下一種語言）；路徑以 danwen- 開頭，只動自己的項目；
   安裝前檢查 GNOME 內建與既有自訂快捷鍵，佔用的略過；uninstall.sh 以專案程式（只用標準函式庫）移除
 - 不做：按住錄音鍵＋數字（danwen 攔不住按鍵，數字會同時送進程式）、由 install.sh 自動建立 GNOME 快捷鍵（改為使用者明確執行 danwen shortcuts install）
+
+## 翻譯的目標語言
+- 一張「翻譯」小紙條＋另外選語言（使用者選定此做法，而非每種語言一張）：`翻譯.yaml` 的 `languages` 段落列出
+  英文／日文／簡體中文，各有 target（填進 system 的 {language}）與該語言的示範；取代原本的「英文」小紙條
+- 選擇存在 `~/.local/state/danwen/language`；選語言時一併切到翻譯。指定小紙條的地方都接受「翻譯（日文）」，
+  不是小紙條名稱的語言「日文」也視為翻譯（日文（舊快捷鍵的） `mode 英文` 因此仍可用）
+- 歷史紀錄、log 記成「翻譯（日文）」；D-Bus 加 ModeLabel、Language 屬性與 ListLanguages、SetLanguage；
+  CycleMode 回傳顯示用名稱
+- 小紙條可設 `postprocess: false`：整理後不再轉繁體、不套替換字典（OpenCC s2twp 會把日文「学」「会」改成「學」「會」）
+- 長度防呆改成比「字／詞」數（中日韓一字一個、其他語言一詞一個）：英文譯文的字母數常是中文原文的三倍以上，
+  原本用字元數比，一句 47 字的中文翻成英文就被當成「在回答」而改貼原文
+- init-config 會移除使用者沒改過的舊 `英文.yaml`（比對雜湊），改過的保留並提示
+- 實測：Groq 三種語言都正確（每句 0.3～0.7 秒，長句約 2 秒）；本機 qwen3:4b 英文、簡體正確，
+  日文曾把「不對，是下週四」翻錯，翻日文建議用雲端
 
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示

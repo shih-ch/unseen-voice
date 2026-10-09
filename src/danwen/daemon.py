@@ -27,7 +27,8 @@ from .history import History, redo_entry
 from .hotkey import Action, HoldDetector, KeyboardListener, display_name, key_code
 from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
-from .refine import RefineError, Refiner, available_prompts, current_mode, cycle_mode, load_prompt, set_mode
+from . import refine
+from .refine import RefineError, Refiner, available_prompts, current_mode, load_prompt, mode_label
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class Daemon:
     def _watch_settings(self) -> None:
         last = None
         while not self._stop.wait(1.0):
-            current = {"Mode": self.current_mode(), **self.plan_properties()}
+            current = {**self.mode_properties(), **self.plan_properties()}
             if last is not None and current != last:
                 self.dbus.notify_properties({k: v for k, v in current.items() if last.get(k) != v})
             last = current
@@ -272,13 +273,12 @@ class Daemon:
             active = self.plan()
             try:
                 refiner = cloud.make_refiner(self.cfg, active.cloud)
-                # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
-                return self.post(refiner.refine(text, mode, terms, context)), f"雲端 {cloud.label(active.cloud)}"
+                return refiner.refine(text, mode, terms, context, self.post), f"雲端 {cloud.label(active.cloud)}"
             except (RefineError, ConfigError) as e:
                 if not self.cfg.refine.local_fallback:
                     raise RefineError(f"雲端整理失敗：{e}") from e
                 self.feedback.notice(f"雲端整理失敗，改用本機（{e}）")
-        return self.post(self.refiner.refine(text, mode, terms, context)), "本機"
+        return self.refiner.refine(text, mode, terms, context, self.post), "本機"
 
     def _process(self, job: Job) -> None:
         audio, released, refine, kind = job.audio, job.released, job.refine, job.kind
@@ -301,7 +301,7 @@ class Daemon:
         mode = where = ""
         refined_with: str | None = None
         if refine and text:
-            mode = current_mode(self.cfg.refine.mode)
+            mode = mode_label(current_mode(self.cfg.refine.mode))  # 翻譯時含語言，例如「翻譯（日文）」
             if job.refine_target == "none":
                 where = "未整理：雲端不能用"  # 錄音開始時已通知過原因
             else:
@@ -338,6 +338,10 @@ class Daemon:
     def current_mode(self) -> str:
         return current_mode(self.cfg.refine.mode)
 
+    def mode_properties(self) -> dict:
+        mode = self.current_mode()
+        return {"Mode": mode, "ModeLabel": mode_label(mode), "Language": refine.current_language()}
+
     def list_modes(self) -> list[tuple[str, str]]:
         modes = []
         for name in available_prompts():
@@ -349,10 +353,16 @@ class Daemon:
         return modes
 
     def set_mode(self, name: str) -> None:
-        set_mode(name)
+        refine.set_mode(name)
 
     def cycle_mode(self, step: int) -> str:
-        return cycle_mode(step, self.cfg.refine.mode)
+        return mode_label(refine.cycle_mode(step, self.cfg.refine.mode))
+
+    def list_languages(self) -> list[str]:
+        return refine.languages()
+
+    def set_language(self, language: str) -> None:
+        refine.set_language(language)
 
     def _require_history(self) -> History:
         if self.history is None:
@@ -378,8 +388,8 @@ class Daemon:
         refiner, _ = cloud.choose_refiner(self.cfg)  # 依方案；雲端不能用時的處理同聽寫
         terms = self.post.replacements.terms()
         result, _ = redo_entry(
-            self._require_history(), entry_id, mode or self.current_mode(),
-            lambda raw, m: self.post(refiner.refine(raw, m, terms)),
+            self._require_history(), entry_id, mode_label(mode or self.current_mode()),
+            lambda raw, m: refiner.refine(raw, m, terms, post=self.post),
         )
         Clipboard.set_text(result)
         if self.dbus:

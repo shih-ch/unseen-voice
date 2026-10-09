@@ -26,6 +26,18 @@ class StubDaemon:
     def current_mode(self):
         return self.mode
 
+    def mode_properties(self):
+        label = "翻譯（日文）" if self.mode == "翻譯" else self.mode
+        return {"Mode": self.mode, "ModeLabel": label, "Language": "日文"}
+
+    def list_languages(self):
+        return ["英文", "日文"]
+
+    def set_language(self, language):
+        if language not in ("英文", "日文"):
+            raise ConfigError(f"沒有「{language}」")
+        self.mode = "翻譯"
+
     def plan_properties(self):
         return {"Plan": self.plan, "PlanTitle": "B 本機辨識＋Groq 整理", "Cloud": True,
                 "CloudAsr": False, "CloudRefine": True, "CloudProvider": "Groq"}
@@ -39,14 +51,14 @@ class StubDaemon:
         self.plan = name
 
     def list_modes(self):
-        return [("日常", "預設"), ("英文", "翻譯")]
+        return [("日常", "預設"), ("翻譯", "翻譯")]
 
     def cycle_mode(self, step):
-        self.mode = "英文" if self.mode == "日常" else "日常"
-        return self.mode
+        self.mode = "翻譯" if self.mode == "日常" else "日常"
+        return self.mode_properties()["ModeLabel"]
 
     def set_mode(self, name):
-        if name not in ("日常", "英文"):
+        if name not in ("日常", "翻譯"):
             raise ConfigError(f"找不到小紙條「{name}」")
         self.mode = name
 
@@ -101,12 +113,18 @@ def test_properties_and_methods(service):
         assert await iface.get_plan() == "local"
         with pytest.raises(DBusError, match="沒有"):
             await iface.call_set_plan("nope")
-        assert [list(m) for m in await iface.call_list_modes()] == [["日常", "預設"], ["英文", "翻譯"]]
-        await iface.call_set_mode("英文")
-        assert await iface.get_mode() == "英文"
+        assert [list(m) for m in await iface.call_list_modes()] == [["日常", "預設"], ["翻譯", "翻譯"]]
+        await iface.call_set_mode("翻譯")
+        assert await iface.get_mode() == "翻譯" and await iface.get_mode_label() == "翻譯（日文）"
         assert await iface.call_cycle_mode(1) == "日常"
-        assert await iface.get_mode() == "日常"
-        await iface.call_set_mode("英文")
+        assert await iface.get_mode() == "日常" and await iface.get_mode_label() == "日常"
+        assert await iface.call_cycle_mode(1) == "翻譯（日文）"
+        assert await iface.call_list_languages() == ["英文", "日文"]
+        await iface.call_set_mode("日常")
+        await iface.call_set_language("日文")
+        assert await iface.get_mode() == "翻譯" and await iface.get_language() == "日文"
+        with pytest.raises(DBusError, match="沒有「火星文」"):
+            await iface.call_set_language("火星文")
         assert json.loads(await iface.call_get_history(1)) == [{"id": 2, "text": "第二句"}]
         assert await iface.call_copy_history(0) == "第二句"
         assert await iface.call_redo(2, "Email") == "Email:2"

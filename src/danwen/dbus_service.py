@@ -51,8 +51,16 @@ class _Interface(ServiceInterface):
         return self._daemon.kind
 
     @dbus_property(access=PropertyAccess.READ)
-    def Mode(self) -> "s":
+    def Mode(self) -> "s":  # 小紙條名稱，例如「日常」「翻譯」
         return self._daemon.current_mode()
+
+    @dbus_property(access=PropertyAccess.READ)
+    def ModeLabel(self) -> "s":  # 顯示用：翻譯時含語言，例如「翻譯（日文）」
+        return self._daemon.mode_properties()["ModeLabel"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Language(self) -> "s":  # 翻譯的目標語言；沒有「翻譯」小紙條時為空字串
+        return self._daemon.mode_properties()["Language"]
 
     @dbus_property(access=PropertyAccess.READ)
     def Hotkey(self) -> "s":  # evdev 按鍵名稱，例如 KEY_RIGHTCTRL
@@ -97,15 +105,24 @@ class _Interface(ServiceInterface):
         return [[name, description] for name, description in self._call(self._daemon.list_modes)]
 
     @method()
-    def SetMode(self, name: "s"):
+    def SetMode(self, name: "s"):  # 也可以是「翻譯（日文）」
         self._call(self._daemon.set_mode, name)
-        self.emit_properties_changed({"Mode": name})
+        self.emit_properties_changed(self._daemon.mode_properties())
 
     @method()
-    def CycleMode(self, step: "i") -> "s":  # 1＝下一張、-1＝上一張；回傳新的小紙條名稱
-        name = self._call(self._daemon.cycle_mode, step)
-        self.emit_properties_changed({"Mode": name})
-        return name
+    def CycleMode(self, step: "i") -> "s":  # 1＝下一張、-1＝上一張；回傳新的小紙條（顯示用，翻譯時含語言）
+        label = self._call(self._daemon.cycle_mode, step)
+        self.emit_properties_changed(self._daemon.mode_properties())
+        return label
+
+    @method()
+    def ListLanguages(self) -> "as":  # 「翻譯」可選的目標語言
+        return self._call(self._daemon.list_languages)
+
+    @method()
+    def SetLanguage(self, language: "s"):  # 選定目標語言，並切到「翻譯」
+        self._call(self._daemon.set_language, language)
+        self.emit_properties_changed(self._daemon.mode_properties())
 
     @method()
     def GetHistory(self, limit: "i") -> "s":

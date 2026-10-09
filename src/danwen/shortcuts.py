@@ -1,4 +1,4 @@
-"""GNOME 自訂快捷鍵：切換小紙條（`danwen shortcuts install／remove／status`）。
+"""GNOME 自訂快捷鍵：切換小紙條與翻譯語言（`danwen shortcuts install／remove／status`）。
 
 只新增、移除 danwen 自己的項目（路徑名稱以 danwen- 開頭），不動使用者原有的自訂快捷鍵。
 安裝前檢查按鍵有沒有被 GNOME 內建或其他自訂快捷鍵佔用，佔用的就略過。
@@ -42,7 +42,8 @@ SHORTCUTS = (
     Shortcut("danwen-mode-2", "但聞人語：小紙條 會議記錄", "<Super><Alt>2", ("mode", "會議記錄")),
     Shortcut("danwen-mode-3", "但聞人語：小紙條 Email", "<Super><Alt>3", ("mode", "Email")),
     Shortcut("danwen-mode-4", "但聞人語：小紙條 Slack", "<Super><Alt>4", ("mode", "Slack")),
-    Shortcut("danwen-mode-5", "但聞人語：小紙條 英文", "<Super><Alt>5", ("mode", "英文")),
+    Shortcut("danwen-mode-5", "但聞人語：小紙條 翻譯", "<Super><Alt>5", ("mode", "翻譯")),
+    Shortcut("danwen-translate-next", "但聞人語：翻譯換下一種語言", "<Super><Alt>t", ("translate", "next")),
 )
 
 

@@ -1,8 +1,9 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | history | cloud | key | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | translate | refine | dict | history | cloud | key | shortcuts | init-config"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import logging.handlers
 import shutil
@@ -114,6 +115,15 @@ def cmd_paste_test(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def _announce(message: str) -> None:
+    print(message)
+    if not sys.stdout.isatty():
+        # 從 GNOME 自訂快捷鍵執行時看不到終端機，改用桌面通知告知
+        from .feedback import Feedback
+
+        Feedback(sounds=False).notice(message)
+
+
 def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
     from . import refine
 
@@ -121,15 +131,8 @@ def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
         if args.name in ("next", "prev"):
             name = refine.cycle_mode(1 if args.name == "next" else -1, cfg.refine.mode)
         else:
-            refine.set_mode(args.name)
-            name = args.name
-        args.name = name
-        print(f"整理模式改用小紙條：{name}")
-        if not sys.stdout.isatty():
-            # 從 GNOME 自訂快捷鍵執行時看不到終端機，改用桌面通知告知
-            from .feedback import Feedback
-
-            Feedback(sounds=False).notice(f"整理模式改用小紙條：{args.name}")
+            name = refine.set_mode(args.name)
+        _announce(f"整理模式改用小紙條：{refine.mode_label(name)}")
         return 0
     current = refine.current_mode(cfg.refine.mode)
     print("小紙條（＊為目前使用中；切換：danwen mode 名稱）：")
@@ -139,7 +142,33 @@ def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
         except config.ConfigError as e:
             description = f"（格式錯誤：{e}）"
         mark = "＊" if name == current else "  "
-        print(f"  {mark}{name:<6} {description}  [{path}]")
+        options = refine.languages(name)
+        if options:
+            description += f"（翻成：{refine.current_language(name)}；換語言：danwen translate）"
+        print(f"  {mark}{_pad(name, 10)}{description}  [{path}]")
+    return 0
+
+
+def cmd_translate(args: argparse.Namespace, cfg: config.Config) -> int:
+    from . import refine
+
+    if args.language:
+        if args.language in ("next", "prev"):
+            language = refine.cycle_language(1 if args.language == "next" else -1, cfg.refine.mode)
+        else:
+            refine.set_language(args.language)
+            language = args.language
+        _announce(f"整理模式改用小紙條：{refine.with_language(refine.TRANSLATE, language)}")
+        return 0
+    options = refine.languages()
+    if not options:
+        print(f"沒有「{refine.TRANSLATE}」小紙條，或它沒有可選的語言（執行 danwen init-config 可補上內建的）",
+              file=sys.stderr)
+        return 1
+    current = refine.current_language()
+    print(f"「{refine.TRANSLATE}」的目標語言（＊為目前選的；切換：danwen translate 語言，會一併切到翻譯）：")
+    for language in options:
+        print(f"  {'＊' if language == current else '  '}{language}")
     return 0
 
 
@@ -153,7 +182,7 @@ def _postprocessor(cfg: config.Config):
 def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     import time
 
-    from .refine import RefineError, Refiner, current_mode
+    from .refine import RefineError, Refiner, current_mode, mode_label
 
     from . import cloud
 
@@ -169,12 +198,12 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     except (cloud.CloudError, config.ConfigError) as e:
         print(f"無法整理：{e}", file=sys.stderr)
         return 1
-    mode = args.mode or current_mode(cfg.refine.mode)
+    mode = mode_label(args.mode or current_mode(cfg.refine.mode))
     text = post(args.text)
     t = time.monotonic()
     try:
         context = {"clipboard": args.context} if args.context else None
-        result = post(refiner.refine(text, mode, post.replacements.terms(), context))
+        result = refiner.refine(text, mode, post.replacements.terms(), context, post)
     except RefineError as e:
         print(f"整理失敗（實際使用時會改貼原文）：{e}", file=sys.stderr)
         return 1
@@ -227,7 +256,7 @@ def _pad(text: str, width: int) -> str:
 def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
     from .history import History
     from .output import Clipboard
-    from .refine import RefineError, Refiner, current_mode
+    from .refine import RefineError, current_mode, mode_label
 
     history = History(size=cfg.history.size, keep_audio=cfg.history.keep_audio)
     try:
@@ -281,9 +310,9 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
             except cloud.CloudError as e:
                 print(f"無法整理：{e}", file=sys.stderr)
                 return 1
-            mode = args.mode or current_mode(cfg.refine.mode)
+            mode = mode_label(args.mode or current_mode(cfg.refine.mode))
             result, new = redo_entry(
-                history, entry.id, mode, lambda raw, m: post(refiner.refine(raw, m, post.replacements.terms()))
+                history, entry.id, mode, lambda raw, m: refiner.refine(raw, m, post.replacements.terms(), post=post)
             )
             Clipboard.set_text(result)
             saved = f"，存成第 {new.id} 筆" if new else ""
@@ -291,7 +320,7 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
     except KeyError as e:
         print(e.args[0], file=sys.stderr)
         return 1
-    except RefineError as e:
+    except (RefineError, config.ConfigError) as e:
         print(f"整理失敗：{e}", file=sys.stderr)
         return 1
     return 0
@@ -437,10 +466,25 @@ def cmd_shortcuts(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+# 已改名或合併的內建小紙條：使用者的複本沒改過（雜湊相同）才刪除
+_RETIRED_PROMPTS = {
+    "英文.yaml": ("7065bfa1cbd95e057ea07312707cb0d8d44bcf9bbfaa5447019906041bc8a887", "翻譯（英文）"),
+}
+
+
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
     targets += [(f, paths.CONFIG_DIR / "prompts" / f.name) for f in sorted((paths.DATA_DIR / "prompts").glob("*.yaml"))]
+    for name, (digest, replaced_by) in _RETIRED_PROMPTS.items():
+        old = paths.CONFIG_DIR / "prompts" / name
+        if not old.exists():
+            continue
+        if hashlib.sha256(old.read_bytes()).hexdigest() == digest:
+            old.unlink()
+            print(f"已移除舊的小紙條（由「{replaced_by}」取代）：{old}")
+        else:
+            print(f"保留你改過的舊小紙條：{old}（已由「{replaced_by}」取代，不需要時可刪除）")
     for src, dest in targets:
         if dest.exists():
             print(f"已存在，保留：{dest}")
@@ -469,10 +513,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("text", nargs="?", default="但聞人語測試：把這個PR merge到main，台灣繁體中文。")
     p.add_argument("--delay", type=int, default=3, help="倒數秒數（預設 3）")
     p = sub.add_parser("mode", help="列出或切換整理模式的小紙條")
-    p.add_argument("name", nargs="?", help="要切換到的小紙條名稱；next／prev＝下一張／上一張")
+    p.add_argument("name", nargs="?", help="要切換到的小紙條名稱（翻譯可寫「翻譯（日文）」或「日文」）；next／prev＝下一張／上一張")
+    p = sub.add_parser("translate", help="列出或切換「翻譯」小紙條的目標語言（會一併切到翻譯）")
+    p.add_argument("language", nargs="?", help="英文、日文、簡體中文…；next／prev＝下一種／上一種")
     p = sub.add_parser("refine", help="用整理模式整理一段文字（測試小紙條用）")
     p.add_argument("text", help="要整理的文字")
-    p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
+    p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式；翻譯可寫「日文」）")
     p.add_argument("--context", help="模擬剪貼簿內容，測試上下文的效果")
     p.add_argument("--cloud", action="store_true", help="強制用目前方案的雲端 LLM（預設依方案）")
     p.add_argument("--local", action="store_true", help="強制用本機 Ollama（預設依方案）")
@@ -482,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("history", help="歷史紀錄：列出、查看、複製、重聽、換小紙條重新整理")
     p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
     p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
-    p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式）")
+    p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式；翻譯可寫「日文」）")
     p = sub.add_parser("cloud", help="方案（本機／雲端）：查看、切換、實測連線")
     p.add_argument("action", nargs="?", default="status",
                    help="status、test、on（預設方案）、off（全部本機），或方案名稱／代號：local/A、hybrid/B、groq/C、cloudflare/D、custom/E")
@@ -491,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=("status", "set", "delete"), default="status")
     p.add_argument("provider", nargs="?", help="groq、openai、cloudflare、custom（預設為設定檔的 cloud.provider）")
     p.add_argument("--all", action="store_true", help="delete 時刪除 danwen 的全部金鑰")
-    p = sub.add_parser("shortcuts", help="GNOME 快捷鍵：切換小紙條（Super+Alt+M、Super+Alt+1～5）")
+    p = sub.add_parser("shortcuts", help="GNOME 快捷鍵：切換小紙條（Super+Alt+M、Super+Alt+1～5）與翻譯語言（Super+Alt+T）")
     p.add_argument("action", nargs="?", choices=("status", "install", "remove"), default="status")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
@@ -510,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         "devices": cmd_devices,
         "paste-test": cmd_paste_test,
         "mode": cmd_mode,
+        "translate": cmd_translate,
         "refine": cmd_refine,
         "dict": cmd_dict,
         "history": cmd_history,

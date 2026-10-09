@@ -1,0 +1,6 @@
+{
+  "uuid": "probe@danwen.test",
+  "name": "danwen probe",
+  "description": "開發用：在 headless GNOME Shell 裡操作 danwen extension 的選單並印出結果（dev/headless-check.sh）",
+  "shell-version": ["46"]
+}

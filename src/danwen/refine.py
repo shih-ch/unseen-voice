@@ -6,6 +6,9 @@ provider：
 
 LLM 的輸出不一定可靠，所以有防呆：輸出空白、比原文長太多（多半是在「回答」內容）、
 或語言跟原文不同（多半是被內容裡的指令帶走）時，丟出 RefineError，由呼叫端改貼原文。
+
+小紙條可以有 languages 段落（內建的「翻譯」）：目標語言另外選，記在 LANGUAGE_FILE。
+指定小紙條的地方都可以寫「翻譯（日文）」，或只寫語言「日文」（＝翻譯（日文））。
 """
 
 from __future__ import annotations
@@ -30,8 +33,13 @@ log = logging.getLogger(__name__)
 BUNDLED_PROMPTS_DIR = paths.DATA_DIR / "prompts"
 USER_PROMPTS_DIR = paths.CONFIG_DIR / "prompts"
 MODE_FILE = paths.STATE_DIR / "mode"
+LANGUAGE_FILE = paths.STATE_DIR / "language"
+TRANSLATE = "翻譯"  # 單獨寫語言名稱時用的小紙條
+_WITH_LANGUAGE_RE = re.compile(r"^(.+?)\s*[（(]\s*(.+?)\s*[）)]$")  # 「翻譯（日文）」，半形括號也可以
 
 _CJK_RE = re.compile("[㐀-䶿一-鿿]")
+# 比長度用：中日韓文字一字算一個，其他語言一個詞算一個（英文譯文的字母數常是中文原文的三倍以上）
+_UNIT_RE = re.compile(r"[㐀-䶿一-鿿぀-ヿ가-힯]|[^\W_㐀-䶿一-鿿぀-ヿ가-힯]+")
 
 CONTEXT_LABELS = {"clipboard": "剪貼簿", "selection": "選取的文字"}
 _CONTEXT_RULE = (
@@ -60,6 +68,13 @@ class Prompt:
     system: str
     examples: list[tuple[str, str]]
     check_language: bool = True
+    postprocess: bool = True  # 整理後再轉繁體、套用替換字典；翻譯成其他語言的小紙條要關掉
+    language: str | None = None  # 有 languages 段落時：這次翻成哪一種
+
+    @property
+    def label(self) -> str:
+        """顯示與記錄用的名稱，例如「日常」「翻譯（日文）」。"""
+        return with_language(self.name, self.language)
 
     def messages(
         self, text: str, terms: list[str] | None = None, context: dict[str, str] | None = None
@@ -99,22 +114,71 @@ def available_prompts() -> dict[str, Path]:
     return found
 
 
-def load_prompt(name: str) -> Prompt:
+def _read(name: str) -> tuple[Path, dict]:
     prompts = available_prompts()
     if name not in prompts:
         raise ConfigError(f"找不到小紙條「{name}」（可用：{'、'.join(prompts) or '無'}）")
     path = prompts[name]
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        examples = [(str(e["input"]), str(e["output"])) for e in data.get("examples") or []]
+    except yaml.YAMLError as e:
+        raise ConfigError(f"小紙條 {path} 格式錯誤：{e}") from e
+    if not isinstance(data, dict):
+        raise ConfigError(f"小紙條 {path} 格式錯誤：應該是 system、examples 等欄位")
+    return path, data
+
+
+def languages(name: str = TRANSLATE) -> list[str]:
+    """小紙條可選的目標語言；沒有這張小紙條或它沒有 languages 段落時為空。"""
+    try:
+        _, data = _read(name)
+    except ConfigError:
+        return []
+    options = data.get("languages")
+    return [str(k) for k in options] if isinstance(options, dict) else []
+
+
+def with_language(name: str, language: str | None) -> str:
+    return f"{name}（{language}）" if language else name
+
+
+def split_mode(name: str) -> tuple[str, str | None]:
+    """「翻譯（日文）」→（翻譯, 日文）；不是小紙條名稱的語言「日文」→（翻譯, 日文）；其他 →（名稱, None）。"""
+    if name in available_prompts():
+        return name, None  # 檔名本身有括號的小紙條
+    if match := _WITH_LANGUAGE_RE.match(name):
+        return match.group(1), match.group(2)
+    if name in languages():
+        return TRANSLATE, name
+    return name, None
+
+
+def load_prompt(name: str) -> Prompt:
+    base, language = split_mode(name)
+    path, data = _read(base)
+    try:
+        system = str(data["system"]).strip()
+        raw_examples = data.get("examples") or []
+        options = data.get("languages") or {}
+        if options:
+            language = language or current_language(base)
+            if language not in options:
+                raise ConfigError(f"小紙條「{base}」沒有「{language}」（可選：{'、'.join(options)}）")
+            entry = options[language]
+            system = system.replace("{language}", str(entry["target"]))
+            raw_examples = entry.get("examples") or []
+        elif language:
+            raise ConfigError(f"小紙條「{base}」不能選語言")
         return Prompt(
-            name=name,
+            name=base,
             description=str(data.get("description", "")),
-            system=str(data["system"]).strip(),
-            examples=examples,
+            system=system,
+            examples=[(str(e["input"]), str(e["output"])) for e in raw_examples],
             check_language=bool(data.get("check_language", True)),
+            postprocess=bool(data.get("postprocess", True)),
+            language=language if options else None,
         )
-    except (yaml.YAMLError, KeyError, TypeError) as e:
+    except (KeyError, TypeError, AttributeError) as e:
         raise ConfigError(f"小紙條 {path} 格式錯誤：{e}") from e
 
 
@@ -123,13 +187,56 @@ def current_mode(default: str) -> str:
         name = MODE_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return default
-    return name or default
+    return split_mode(name or default)[0]  # 舊版記錄的「英文」＝翻譯
 
 
-def set_mode(name: str) -> None:
-    load_prompt(name)  # 先確認存在且格式正確
+def mode_label(name: str) -> str:
+    """顯示與記錄用的名稱：有 languages 的小紙條加上目標語言，例如「翻譯（日文）」。"""
+    base, language = split_mode(name)
+    if language is None and languages(base):
+        language = current_language(base)
+    return with_language(base, language)
+
+
+def set_mode(name: str) -> str:
+    """切換小紙條；也可以寫「翻譯（日文）」或「日文」，會一併選定語言。回傳小紙條名稱。"""
+    base, language = split_mode(name)
+    load_prompt(name)  # 先確認存在、格式正確、有這種語言
+    if language:
+        LANGUAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LANGUAGE_FILE.write_text(language + "\n", encoding="utf-8")
     MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MODE_FILE.write_text(name + "\n", encoding="utf-8")
+    MODE_FILE.write_text(base + "\n", encoding="utf-8")
+    return base
+
+
+def current_language(name: str = TRANSLATE) -> str:
+    """目前選的目標語言；記錄的語言已不在清單裡時用第一個。沒有可選的語言時為空字串。"""
+    options = languages(name)
+    try:
+        chosen = LANGUAGE_FILE.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        chosen = ""
+    return chosen if chosen in options else (options[0] if options else "")
+
+
+def set_language(language: str) -> None:
+    """選定翻譯的目標語言，並把整理模式切到「翻譯」。"""
+    set_mode(with_language(TRANSLATE, language))
+
+
+def cycle_language(step: int, default: str) -> str:
+    """換到下一種（step=1）或上一種（step=-1）目標語言，並切到「翻譯」；回傳新的語言。
+    目前不是翻譯模式時先切過去、語言不變（第一次按只是進入翻譯）。"""
+    options = languages()
+    if not options:
+        raise ConfigError(f"沒有「{TRANSLATE}」小紙條，或它沒有可選的語言")
+    current = current_language()
+    if current_mode(default) != TRANSLATE:
+        step = 0
+    language = options[(options.index(current) + step) % len(options)]
+    set_language(language)
+    return language
 
 
 def cycle_mode(step: int, default: str) -> str:
@@ -147,7 +254,7 @@ def cycle_mode(step: int, default: str) -> str:
 def check_output(source: str, output: str, check_language: bool) -> None:
     if not output:
         raise RefineError("LLM 沒有輸出")
-    if len(output) > 2 * len(source) + 40:
+    if len(_UNIT_RE.findall(output)) > 2 * len(_UNIT_RE.findall(source)) + 40:
         raise RefineError("輸出比原文長太多，可能是在回答內容而不是整理")
     if check_language:
         src_chars = _CJK_RE.findall(source)
@@ -223,7 +330,10 @@ class Refiner:
         mode: str | None = None,
         terms: list[str] | None = None,
         context: dict[str, str] | None = None,
+        post: Callable[[str], str] | None = None,
     ) -> str:
+        """post：整理後的轉換（轉繁體、替換字典）；LLM 可能輸出簡體字或「臺」，所以要再過一次。
+        小紙條設了 postprocess: false（翻譯成其他語言）時不轉。"""
         prompt = load_prompt(mode or current_mode(self.cfg.mode))
         if context and not self.context_allowed():
             log.warning("LLM 服務不在本機且未開啟 context_to_cloud，不送出上下文")
@@ -255,6 +365,8 @@ class Refiner:
         output = _THINK_RE.sub("", output)
         output = "\n".join(line.rstrip() for line in output.strip().splitlines())
         check_output(text, output, prompt.check_language)
+        if post is not None and prompt.postprocess:
+            output = post(output)
         return output
 
     def _api_key(self) -> str:

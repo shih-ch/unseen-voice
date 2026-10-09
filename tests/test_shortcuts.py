@@ -76,6 +76,16 @@ def test_install_twice_does_not_duplicate_and_remove_only_ours():
     assert gs.custom[f"{BASE_PATH}danwen-mode-next/"] == {}  # 我們的已清空
 
 
+def test_shortcut_modes_exist():
+    from danwen import refine
+
+    for sc in SHORTCUTS:
+        if sc.args[0] == "mode" and sc.args[1] not in ("next", "prev"):
+            refine.load_prompt(sc.args[1])  # 小紙條改名時快捷鍵要跟著改
+        elif sc.args[0] == "translate":
+            assert sc.args[1] in ("next", "prev", *refine.languages())
+
+
 def test_commands_quote_chinese_names():
     gs = FakeGSettings({}, {})
     Shortcuts(gs).install("/home/u/.local/bin/danwen")

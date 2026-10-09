@@ -122,11 +122,20 @@ def test_cli_redo_with_another_prompt(tmp_path, fake_llm, monkeypatch, capsys):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(f"refine:\n  base_url: {llm.url}\ncloud:\n  plan: local\n", encoding="utf-8")
 
-    assert cli.main(["-c", str(cfg_file), "history", "redo", "1", "-m", "英文"]) == 0
+    assert cli.main(["-c", str(cfg_file), "history", "redo", "1", "-m", "英文"]) == 0  # 英文＝翻譯（英文）
     assert copied == ["Our meeting is today."]
     new = h.get()
-    assert new.id == 2 and new.redo_of == 1 and new.mode == "英文" and new.raw == "嗯，那個今天開會。"
+    assert new.id == 2 and new.redo_of == 1 and new.mode == "翻譯（英文）" and new.raw == "嗯，那個今天開會。"
     assert "已複製到剪貼簿" in capsys.readouterr().out
+
+
+def test_daemon_translation_is_pasted_without_conversion(tmp_path, fake_llm):
+    llm = fake_llm("学校で会議があります。")
+    d = make_daemon(tmp_path, llm.url)
+    d.set_mode("日文")
+    d._process(Job(np.full(16000, 0.1, np.float32), time.monotonic(), True))
+    assert d.paster.pasted == ["学校で会議があります。"]  # 沒被轉成「學」「會」
+    assert d.history.get().mode == "翻譯（日文）"
 
 
 def test_daemon_reads_context_only_when_enabled(tmp_path, fake_llm, monkeypatch):
@@ -156,14 +165,16 @@ def test_daemon_dbus_operations(tmp_path, fake_llm, monkeypatch):
     d = make_daemon(tmp_path, llm.url)
     add(d.history, "嗯，今天開會。")
 
-    assert ("英文", "整理後翻譯成自然的英文") in d.list_modes()
-    d.set_mode("英文")
-    assert d.current_mode() == "英文"
+    assert ("翻譯", "整理後翻譯成選定的語言") in d.list_modes()
+    d.set_language("英文")
+    assert d.current_mode() == "翻譯"
+    assert d.mode_properties() == {"Mode": "翻譯", "ModeLabel": "翻譯（英文）", "Language": "英文"}
+    assert d.list_languages() == ["英文", "日文", "簡體中文"]
     assert json.loads(d.history_json(5))[0]["text"] == "嗯，今天開會。"
     assert d.copy_history(0) == "嗯，今天開會。"
-    assert d.redo(0, "") == "Our meeting is today."  # 空字串＝目前的小紙條（英文）
+    assert d.redo(0, "") == "Our meeting is today."  # 空字串＝目前的小紙條（翻譯（英文））
     assert copied == ["嗯，今天開會。", "Our meeting is today."]
-    assert d.history.get().redo_of == 1
+    assert d.history.get().redo_of == 1 and d.history.get().mode == "翻譯（英文）"
     with pytest.raises(RuntimeError, match="尚未就緒"):
         d.start_long()  # 監聽還沒啟動
 

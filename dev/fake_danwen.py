@@ -26,6 +26,7 @@ class FakeDaemon:
 
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
+        self.language = "英文"
         self.plan = "hybrid"
         self._refused_once = False
         self.manual = threading.Event()  # 由選單控制錄音時停止自動切換
@@ -50,6 +51,19 @@ class FakeDaemon:
 
     def current_mode(self):
         return self.mode
+
+    def mode_properties(self):
+        label = refine.with_language(self.mode, self.language if self.mode == refine.TRANSLATE else None)
+        return {"Mode": self.mode, "ModeLabel": label, "Language": self.language}
+
+    def list_languages(self):
+        return refine.languages()
+
+    def set_language(self, language):
+        if language not in refine.languages():
+            raise ConfigError(f"「翻譯」小紙條沒有「{language}」")
+        self.language = language
+        self.set_mode(refine.TRANSLATE)
 
     def plan_properties(self):
         p = cloud.PLANS[self.plan]
@@ -77,7 +91,7 @@ class FakeDaemon:
         names = list(refine.available_prompts())
         index = names.index(self.mode) if self.mode in names else -1
         self.set_mode(names[(index + step) % len(names)])
-        return self.mode
+        return self.mode_properties()["ModeLabel"]
 
     def set_mode(self, name):
         if name not in refine.available_prompts():

@@ -25,6 +25,8 @@ const IFACE_XML = `
     <property name="State" type="s" access="read"/>
     <property name="Kind" type="s" access="read"/>
     <property name="Mode" type="s" access="read"/>
+    <property name="ModeLabel" type="s" access="read"/>
+    <property name="Language" type="s" access="read"/>
     <property name="Hotkey" type="s" access="read"/>
     <property name="Plan" type="s" access="read"/>
     <property name="PlanTitle" type="s" access="read"/>
@@ -39,6 +41,8 @@ const IFACE_XML = `
     <method name="CycleMode">
       <arg type="i" name="step" direction="in"/><arg type="s" direction="out"/>
     </method>
+    <method name="ListLanguages"><arg type="as" direction="out"/></method>
+    <method name="SetLanguage"><arg type="s" name="language" direction="in"/></method>
     <method name="GetHistory">
       <arg type="i" name="limit" direction="in"/><arg type="s" direction="out"/>
     </method>
@@ -71,6 +75,8 @@ const KEY_NAMES = {
     KEY_CAPSLOCK: 'Caps Lock', KEY_SCROLLLOCK: 'Scroll Lock', KEY_PAUSE: 'Pause', KEY_COMPOSE: 'Menu',
 };
 const HISTORY_ITEMS = 5;
+// 可以另外選目標語言的小紙條（與 danwen 的 refine.TRANSLATE 相同）
+const TRANSLATE = '翻譯';
 
 // 把 evdev 按鍵名稱轉成好讀的名字（KEY_F9 → F9）
 function keyName(evdevName) {
@@ -285,6 +291,11 @@ class DanwenIndicator extends PanelMenu.Button {
         this._modeMenu = new PopupMenu.PopupSubMenuMenuItem('小紙條');
         this.menu.addMenuItem(this._modeMenu);
 
+        // 翻譯的目標語言（選了就一併切到「翻譯」）；danwen 沒有提供語言時隱藏
+        this._languageMenu = new PopupMenu.PopupSubMenuMenuItem('翻譯成');
+        this._languageItems = new Map();
+        this.menu.addMenuItem(this._languageMenu);
+
         this._historyHeader = new PopupMenu.PopupSeparatorMenuItem('最近的聽寫（點一下複製）');
         this.menu.addMenuItem(this._historyHeader);
         this._history = new PopupMenu.PopupMenuSection();
@@ -316,13 +327,14 @@ class DanwenIndicator extends PanelMenu.Button {
         if (running) {
             // 只有這次錄音真的會送資料出去時才標 ☁：雲端辨識，或整理模式且整理走雲端
             const {Kind: kind, CloudAsr: asr, CloudRefine: refine} = this._proxy;
-            this._osd.update(this._proxy.State, kind, this._proxy.Mode, this._proxy.Hotkey,
+            this._osd.update(this._proxy.State, kind, this._proxy.ModeLabel || this._proxy.Mode, this._proxy.Hotkey,
                 Boolean(asr || (kind === 'refine' && refine)));
         } else {
             this._osd.update('offline', '', '', '', false);
         }
         for (const part of [this._modeMenu, this._historyHeader, this._history.actor, this._planMenu])
             part.visible = running;
+        this._languageMenu.visible = running && this._languageItems.size > 0;
         if (!running)
             this._redoMenu.visible = false; // 有紀錄時由 _refreshLists 打開
         this._actions.removeAll();
@@ -334,17 +346,21 @@ class DanwenIndicator extends PanelMenu.Button {
         }
 
         const {State: current, Kind: kind, Mode: mode, Plan: plan, PlanTitle: planTitle, Cloud: cloud} = this._proxy;
+        const {ModeLabel: modeLabel, Language: language} = this._proxy;
         const status = current === 'recording'
             ? `${STATE_LABELS.recording}（${KIND_LABELS[kind] ?? kind}）`
             : STATE_LABELS[current] ?? current;
         const planShort = `${cloud ? '☁ ' : ''}方案 ${(planTitle ?? '').split(' ')[0]}`;
-        this._statusItem.label.text = `${status}　·　小紙條：${mode}　·　${planShort}`;
+        this._statusItem.label.text = `${status}　·　小紙條：${modeLabel || mode}　·　${planShort}`;
         this._planMenu.label.text = `方案：${planTitle ?? ''}`;
         for (const [name, item] of this._planItems)
             item.setOrnament(name === plan ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
-        this._modeMenu.label.text = `小紙條：${mode}`;
+        this._modeMenu.label.text = `小紙條：${modeLabel || mode}`;
         for (const [name, item] of this._modeItems)
             item.setOrnament(name === mode ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        this._languageMenu.label.text = `翻譯成：${language ?? ''}`;
+        for (const [name, item] of this._languageItems)
+            item.setOrnament(name === language ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
 
         if (current === 'recording') {
             this._addItem(this._actions, '結束錄音', () => this._call('StopAsync'));
@@ -360,7 +376,7 @@ class DanwenIndicator extends PanelMenu.Button {
         if (!this._running)
             return;
         const generation = ++this._generation;
-        let modes, history, plans;
+        let modes, history, plans, languages = [];
         try {
             [plans] = await this._proxy.ListPlansAsync();
             [modes] = await this._proxy.ListModesAsync();
@@ -369,6 +385,11 @@ class DanwenIndicator extends PanelMenu.Button {
         } catch (e) {
             logError(e, `${APP_NAME}：讀取小紙條或歷史紀錄失敗`);
             return;
+        }
+        try {
+            [languages] = await this._proxy.ListLanguagesAsync();
+        } catch {
+            // 舊版 danwen 沒有翻譯語言：不顯示「翻譯成」
         }
         // 讀取期間又觸發了一次更新，或 extension 已停用：放棄這次結果
         if (generation !== this._generation || !this._icon)
@@ -393,6 +414,16 @@ class DanwenIndicator extends PanelMenu.Button {
             this._modeItems.set(name, item);
         }
 
+        const language = this._proxy.Language;
+        this._languageMenu.menu.removeAll();
+        this._languageItems.clear();
+        for (const name of languages) {
+            const item = this._addItem(this._languageMenu.menu, name, () => this._call('SetLanguageAsync', name));
+            item.setOrnament(name === language ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+            this._languageItems.set(name, item);
+        }
+        this._languageMenu.visible = languages.length > 0;
+
         this._history.removeAll();
         if (history.length === 0) {
             this._history.addMenuItem(new PopupMenu.PopupMenuItem('（還沒有紀錄）', {reactive: false}));
@@ -405,9 +436,14 @@ class DanwenIndicator extends PanelMenu.Button {
             });
         }
 
+        // 翻譯展開成每一種語言，方便把同一句話翻成好幾種
         this._redoMenu.menu.removeAll();
-        for (const [name] of modes)
-            this._addItem(this._redoMenu.menu, name, () => this._redo(name));
+        for (const [name] of modes) {
+            const choices = name === TRANSLATE && languages.length > 0
+                ? languages.map(lang => `${name}（${lang}）`) : [name];
+            for (const choice of choices)
+                this._addItem(this._redoMenu.menu, choice, () => this._redo(choice));
+        }
         this._redoMenu.visible = history.length > 0 && modes.length > 0;
     }
 

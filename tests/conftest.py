@@ -10,7 +10,7 @@ import pytest
 def isolate_user_environment(tmp_path, monkeypatch):
     """測試絕不碰使用者的真實環境：
     - 不讀真正的 GNOME 鑰匙圈（需要金鑰的測試自己換成假金鑰）
-    - 方案、小紙條、歷史紀錄的狀態都放在暫存資料夾
+    - 方案、小紙條、歷史紀錄的狀態都放在暫存資料夾；不讀使用者的設定檔、替換字典與自訂小紙條
     - 只能連到本機的假服務；任何對外連線直接失敗（曾因此用真金鑰呼叫到 Groq）"""
     from danwen import cloud, httpclient, paths, refine
     from danwen.asr import cloud as asr_cloud
@@ -21,7 +21,12 @@ def isolate_user_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "api_key", no_keyring)
     monkeypatch.setattr(cloud, "STATE_FILE", tmp_path / "isolated" / "cloud")
     monkeypatch.setattr(refine, "MODE_FILE", tmp_path / "isolated" / "mode")
+    monkeypatch.setattr(refine, "LANGUAGE_FILE", tmp_path / "isolated" / "language")
     monkeypatch.setattr(paths, "HISTORY_DIR", tmp_path / "isolated" / "history")
+    monkeypatch.setattr(paths, "CONFIG_DIR", tmp_path / "isolated" / "config")
+    monkeypatch.setattr(paths, "CONFIG_FILE", tmp_path / "isolated" / "config" / "config.yaml")
+    monkeypatch.setattr(paths, "REPLACEMENTS_FILE", tmp_path / "isolated" / "config" / "replacements.yaml")
+    monkeypatch.setattr(refine, "USER_PROMPTS_DIR", tmp_path / "isolated" / "config" / "prompts")
 
     real_post = httpclient.post
 
