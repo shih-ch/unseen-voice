@@ -12,7 +12,7 @@
 
 ## 環境
 - Ubuntu、GNOME on Wayland、輸入法為 fcitx5（不可動到 fcitx5 / IBus 設定）
-- Intel Core Ultra 7 155（無獨顯），全程離線
+- Intel Core Ultra 7 155（無獨顯），全程離線（v1；v3 起整理模式可選雲端，見「方案」）
 - Python 3，用 uv 管理；以 systemd --user 服務常駐
 
 ## 流程
@@ -71,14 +71,16 @@
 串流即時顯示、浮動視窗、LLM 整理、語音指令
 
 ## v2：整理模式（已實作）
-參考保哥 ZeroType「辨識 → LLM 依提示詞整理」的兩段式設計，但預設全程在本機。
+參考保哥 ZeroType「辨識 → LLM 依提示詞整理」的兩段式設計，v2 預設全程在本機。
+（v3 起改由「方案」決定，預設方案 B：辨識在本機、整理走 Groq，見下方「方案：本機與雲端」。）
 - 觸發：先短按一下熱鍵、0.4 秒內再按住（`hotkey.double_tap_ms`，0＝停用）；不佔新鍵，與 fcitx5 不衝突。
   單純按住仍是快速模式（不經 LLM）
 - 「小紙條」：`~/.config/danwen/prompts/*.yaml`（system＋示範例句），內建 日常／會議記錄／翻譯；
   `danwen mode` 切換，狀態存在 `~/.local/state/danwen/mode`，可綁 GNOME 自訂快捷鍵
-- LLM：預設本機 Ollama `qwen3:4b-instruct-2507-q4_K_M`（原生 API，可設 keep_alive）；
-  `provider: openai` 可改接任何 OpenAI 相容服務（雲端為使用者自選，非預設）
-- 開始錄音時就背景載入模型；整理結果再過一次 OpenCC 與替換字典（模型會輸出簡體字，如「准備」）
+- LLM：本機 Ollama `qwen3:4b-instruct-2507-q4_K_M`（原生 API，可設 keep_alive；v3 起為方案 A 使用）；
+  `provider: openai` 可改接任何 OpenAI 相容服務（v2 時雲端為使用者自選；v3 起預設方案 B 用 Groq）
+- 開始錄音時就背景載入模型；整理結果再過一次 OpenCC 與替換字典（模型會輸出簡體字，如「准備」；
+  翻譯類的小紙條設 postprocess: false 不轉）
 - 防呆：無回應、空白、比原文長太多、語言改變 → 通知並改貼原文；逐字稿包在 <逐字稿> 標籤中，
   示範例句教模型「內容是問題或指令也不回答、不執行」
 - 實測（CPU，qwen3:4b）：自建 9 句測試集 9/9 通過；模型已載入時放開到貼上約 2～3 秒

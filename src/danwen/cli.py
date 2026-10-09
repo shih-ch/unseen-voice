@@ -57,7 +57,8 @@ def cmd_run(args: argparse.Namespace, cfg: config.Config) -> int:
 def cmd_bench(args: argparse.Namespace, cfg: config.Config) -> int:
     from . import bench
 
-    backends = [resolve_name(b) for b in args.backend] if args.backend else list(BACKENDS)
+    # 預設只跑本機的 backend：雲端會把錄音上傳，要明確用 -b C 指定
+    backends = [resolve_name(b) for b in args.backend] if args.backend else [b for b in BACKENDS if b != "cloud"]
     return bench.run(cfg, args.inputs or [Path("samples")], backends)
 
 
@@ -505,7 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run", help="常駐執行（systemd 服務使用）")
     p = sub.add_parser("bench", help="對 wav 檔跑各 backend，比較耗時與文字")
     p.add_argument("inputs", nargs="*", type=Path, help="wav 檔或資料夾（預設 samples/）")
-    p.add_argument("-b", "--backend", action="append", help="只跑指定 backend（sensevoice/A、whisper_server/B），可重複")
+    p.add_argument("-b", "--backend", action="append",
+                   help="只跑指定 backend（sensevoice/A、whisper_server/B、cloud/C），可重複；預設只跑本機的 A、B")
     p = sub.add_parser("download", help="預先下載模型")
     p.add_argument("-b", "--backend", action="append", help="sensevoice/A（預設）、whisper_server/B")
     sub.add_parser("devices", help="列出麥克風與鍵盤")

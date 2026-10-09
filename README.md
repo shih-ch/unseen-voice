@@ -4,7 +4,7 @@
 
 GNOME Wayland 上的語音聽寫：**按住右 Ctrl 說話，放開後自動貼上繁體中文**。
 
-- **快速模式**：語音辨識在本機（SenseVoice，CPU），全程離線，放開到貼上約 0.3 秒
+- **快速模式**：語音辨識在本機（SenseVoice，CPU），不需連網，放開到貼上約 0.3 秒（方案 C、D 才改用雲端辨識）
 - **整理模式**：再交給 LLM 依「小紙條」刪贅詞、條列、改寫成 Email／Slack，或翻譯成英文、日文、簡體中文。
   可用本機 Ollama（離線）或雲端；預設方案 B 用 Groq（需自備免費的 API Key，存在 GNOME 鑰匙圈）
 - 不動 fcitx5／IBus 設定，可以跟注音輸入法並用；`uninstall.sh` 可完整移除
@@ -48,7 +48,7 @@ cd unseen-voice
 | 按住右 Ctrl 超過 0.3 秒 | 「嘟↑」開始錄音 |
 | 放開 | 「嘟↓」結束，辨識後貼到游標位置 |
 | 按住期間按了其他鍵（例如 Ctrl+Space） | 視為組合鍵，取消錄音 |
-| **先短按一下右 Ctrl，0.4 秒內再按住** | 「嘟嘟嘟↑」整理模式：辨識後交給本機 LLM 整理再貼上 |
+| **先短按一下右 Ctrl，0.4 秒內再按住** | 「嘟嘟嘟↑」整理模式：辨識後交給 LLM 整理再貼上（本機或雲端，依「方案」） |
 | **很快連按兩下右 Ctrl** | 「嘟↑嘟↑」長錄音：不必按著（最長 10 分鐘），**再按一下**結束、**Esc** 取消；期間其他按鍵不影響，可先點好要貼上的位置。短於 1.5 秒視為誤觸，不貼上 |
 
 ### 整理模式
@@ -60,9 +60,10 @@ cd unseen-voice
 | 嗯，那個我們明天下午三點開會，不對，應該是四點，然後要討論三件事，第一是預算，第二是人力，第三是把這個PR merge到main。 | 我們明天下午四點開會，要討論三件事：<br>1. 預算<br>2. 人力<br>3. 把這個 PR merge 到 main |
 | 幫我寫一首關於秋天的詩。 | 幫我寫一首關於秋天的詩。（只整理，不會回答或執行內容） |
 
-- 預設用本機 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M`，完全離線；需先 `ollama pull` 這個模型
-- 開始錄音時就先載入模型；載入後每句約 2～3 秒，用過後模型留在記憶體 30 分鐘（約 3 GB）
-- LLM 沒回應、輸出空白、比原文長太多（像在回答問題）或語言變了，會通知並**改貼原文**
+- 用哪個 LLM 由「方案」決定（見下方「方案：本機與雲端」）：預設方案 B 用 Groq，每句約 0.7 秒；
+  方案 A 用本機 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M`，完全離線，需先 `ollama pull` 這個模型
+- 用本機 Ollama 時，開始錄音就先載入模型；載入後每句約 2～4 秒，用過後模型留在記憶體 30 分鐘（約 3 GB）
+- LLM 沒回應、輸出空白、比原文長太多（像在回答問題）、語言變了，或內容跟口述對不起來，會通知並**改貼原文**
 - 內建五張小紙條：`日常`（預設）、`會議記錄`、`Slack`、`Email`、`翻譯`。小紙條放在
   `~/.config/danwen/prompts/*.yaml`，可自行修改或新增，檔名就是模式名稱
 - `翻譯` 的目標語言另外選：英文（預設）、日文、簡體中文。翻譯結果不會再轉成繁體或套用替換字典，
@@ -107,16 +108,6 @@ log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的�
   | Super+Alt+T | 翻譯換下一種語言（不在翻譯時先切到翻譯，語言不變） |
 
   切換時會跳出通知。想用別的按鍵，可在「設定 → 鍵盤 → 檢視及自訂快捷鍵 → 自訂快捷鍵」修改
-
-想要更好的整理品質，可改用雲端（需連網，文字會送到該服務；語音辨識仍在本機）：
-
-```yaml
-refine:
-  provider: openai                       # 任何 OpenAI 相容服務
-  base_url: https://api.groq.com/openai/v1
-  model: <服務提供的模型名稱>
-  api_key_file: ~/.config/danwen/api_key # chmod 600
-```
 
 - 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
@@ -194,20 +185,23 @@ danwen dict remove 肉type
 danwen devices            # 列出麥克風與鍵盤
 danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
+danwen translate          # 翻譯的目標語言：列出、切換
+danwen shortcuts install  # 設定切換小紙條的 GNOME 快捷鍵（remove 移除、status 查看）
 danwen dict               # 替換字典：列出、新增、刪除
 danwen history            # 歷史紀錄：列出最近 20 次聽寫
 danwen cloud / key        # 方案：查看、切換、實測；API Key 存取（GNOME 鑰匙圈）
-danwen bench -b C         # 用雲端語音辨識跑 benchmark
-danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
+danwen bench              # 對 samples/*.wav 分別跑本機的 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A
+danwen bench -b C         # 用目前方案的雲端語音辨識跑（錄音會上傳到該服務商，要明確指定才會跑）
 danwen download -b B      # 預先下載模型
 journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段耗時）
 ```
 
-每次聽寫的耗時也記錄在 `~/.local/state/danwen/danwen.log`，例如：
+每次聽寫的耗時也記錄在 `~/.local/state/danwen/danwen.log`（只記字數，不記內容），例如：
 
 ```
-聽寫完成 錄音=10.21s ASR=0.281s 後處理=0.001s 貼上=0.062s 放開到貼上=0.402s 字數=48 backend=sensevoice
+聽寫完成 錄音=4.47s ASR=0.118s 後處理=0.002s 整理=0.000s 貼上=0.073s 放開到貼上=0.203s 字數=2 backend=sensevoice
+聽寫完成 錄音=3.28s ASR=0.087s 後處理=0.000s 整理=0.499s 貼上=0.074s 放開到貼上=0.668s 字數=8 backend=sensevoice 小紙條=Slack（雲端 Groq）
 ```
 
 ## GNOME extension
@@ -223,9 +217,11 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 （截圖由 `SHOTS=docs/screenshots dev/headless-check.sh` 在隔離的 GNOME Shell 裡產生，內容是假資料）
 
 - 圖示：待命、錄音（紅）、辨識整理中（黃「…」）、danwen 未執行（灰）
-- 選單：開始／結束／取消長錄音、切換小紙條、翻譯成（英文、日文、簡體中文）、最近 5 筆（點一下複製）、
-  換小紙條重新整理最新一筆（翻譯展開成各語言，可把同一句翻成好幾種）、開啟設定檔
-- 錄音時畫面上方中央的小提示：「● 錄音中 0:03」「● 長錄音 1:25 · 再按一下 右 Ctrl 結束，Esc 取消」「… 整理中」
+- 選單：開始／結束／取消長錄音、方案（本機／雲端）、切換小紙條、翻譯成（英文、日文、簡體中文）、
+  最近 5 筆（點一下複製）、換小紙條重新整理最新一筆（翻譯展開成各語言，可把同一句翻成好幾種）、
+  開啟設定檔／替換字典／小紙條資料夾
+- 錄音時畫面上方中央的小提示：「● 錄音中 0:03 · 整理：日常」「● 長錄音 1:25 · 再按一下 右 Ctrl 結束，Esc 取消」
+  「… 整理中（日常）」；這次錄音或文字會送到雲端時，前面加「☁」
 
 目前只宣告支援 GNOME 46；GNOME 升級後若不相容會自動停用，聽寫本身不受影響。
 
@@ -286,7 +282,8 @@ dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取
 熱鍵（evdev，只監聽不攔截）→ 錄音（sounddevice 16 kHz）→ ASR backend → 後處理 →（整理模式）→ 貼上
                                                       │                     │                │
                                A：SenseVoice（sherpa-onnx, CPU）     去標籤 → OpenCC     LLM 依小紙條整理
-                               B：whisper.cpp server（Vulkan, HTTP）  → 替換字典        → 再過一次後處理
+                               B：whisper.cpp server（Vulkan, HTTP）  → 替換字典        （本機 Ollama 或雲端）
+                               雲端：Groq、Cloudflare 等（依方案）                       → 再過一次後處理（翻譯除外）
 貼上：備份剪貼簿 → xclip（經 XWayland，不搶焦點）→ 虛擬鍵盤 Ctrl+V → 0.5 秒後還原
 ```
 

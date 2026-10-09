@@ -26,3 +26,13 @@ def test_unknown_key_is_an_error(tmp_path):
     f.write_text("hotkey:\n  hold_msec: 500\n", encoding="utf-8")
     with pytest.raises(config.ConfigError, match="hotkey.hold_msec"):
         config.load(f)
+
+
+def test_bench_runs_only_local_backends_by_default(monkeypatch):
+    from danwen import bench, cli
+
+    ran = []
+    monkeypatch.setattr(bench, "run", lambda cfg, inputs, backends: ran.append(backends) or 0)
+    assert cli.main(["bench"]) == 0
+    assert cli.main(["bench", "-b", "C"]) == 0
+    assert ran == [["sensevoice", "whisper_server"], ["cloud"]]  # 雲端會上傳錄音，要明確指定
