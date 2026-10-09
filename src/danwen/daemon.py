@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import queue
 import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ from .config import Config, ConfigError
 from .feedback import Feedback
 from .history import History
 from .hotkey import Action, HoldDetector, KeyboardListener, key_code
-from .output import VKBD_NAME, Paster
+from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
 from .refine import RefineError, Refiner, current_mode
 
@@ -108,6 +109,28 @@ class Daemon:
                 log.exception("聽寫失敗")
                 self.feedback.error(f"聽寫失敗：{e}")
 
+    def _context(self) -> dict[str, str] | None:
+        """在貼上之前讀取剪貼簿／選取的文字當參考資料（設定開啟才讀）。只記錄字數，不記錄內容。"""
+        cfg = self.cfg.refine
+        if not (cfg.context_clipboard or cfg.context_selection) or not self.refiner.context_allowed():
+            return None
+        sources = {}
+        if cfg.context_clipboard:
+            sources["clipboard"] = Clipboard.get_text
+        if cfg.context_selection:
+            sources["selection"] = Clipboard.get_selection
+        context: dict[str, str] = {}
+        for name, read in sources.items():
+            try:
+                value = (read() or "").strip()
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if value:
+                context[name] = value[: cfg.context_max_chars]
+        if context:
+            log.info("上下文：%s", "、".join(f"{k} {len(v)} 字" for k, v in context.items()))
+        return context or None
+
     def _process(self, audio: np.ndarray, released: float, refine: bool) -> None:
         sr = self.cfg.audio.sample_rate
         duration = audio.size / sr
@@ -130,7 +153,7 @@ class Daemon:
             try:
                 # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
                 terms = self.post.replacements.terms()
-                text = self.post(self.refiner.refine(text, mode, terms))
+                text = self.post(self.refiner.refine(text, mode, terms, self._context()))
                 refined_with = mode
             except (RefineError, ConfigError) as e:
                 self.feedback.notice(f"整理失敗，已貼上原文（{e}）")

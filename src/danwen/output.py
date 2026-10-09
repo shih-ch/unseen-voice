@@ -66,6 +66,14 @@ class Clipboard:
         data = cls._read(_TEXT_TARGET)
         return data.decode(errors="replace") if data is not None else None
 
+    @staticmethod
+    def get_selection() -> str | None:
+        """最近選取的文字（X11 PRIMARY，Mutter 會與 Wayland 程式同步）。"""
+        r = subprocess.run(
+            ["xclip", "-selection", "primary", "-o", "-t", _TEXT_TARGET], capture_output=True, timeout=2
+        )
+        return r.stdout.decode(errors="replace") if r.returncode == 0 else None
+
     @classmethod
     def restore(cls, saved: ClipboardContent | None) -> None:
         if saved is None:

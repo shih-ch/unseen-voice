@@ -78,6 +78,10 @@ class RefineConfig:
     timeout_s: float = 30.0
     keep_alive: str = "30m"
     mode: str = "日常"
+    context_clipboard: bool = False
+    context_selection: bool = False
+    context_max_chars: int = 1000
+    context_to_cloud: bool = False
 
 
 @dataclass

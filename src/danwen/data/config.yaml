@@ -63,6 +63,13 @@ refine:
   keep_alive: 30m
   # 預設的小紙條（~/.config/danwen/prompts/ 裡的檔名）；可用 `danwen mode` 隨時切換
   mode: 日常
+  # 上下文：把剪貼簿／最近選取的文字當參考資料交給 LLM（只用來判斷專有名詞與上下文，不會照抄或執行）
+  context_clipboard: false
+  context_selection: false
+  # 每個來源最多取幾個字
+  context_max_chars: 1000
+  # base_url 不是本機時，預設不送出上下文；要送到雲端服務請明確改成 true
+  context_to_cloud: false
 
 output:
   # 貼上後還原原本的剪貼簿

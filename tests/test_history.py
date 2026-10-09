@@ -126,3 +126,22 @@ def test_cli_redo_with_another_prompt(tmp_path, fake_llm, monkeypatch, capsys):
     new = h.get()
     assert new.id == 2 and new.redo_of == 1 and new.mode == "英文" and new.raw == "嗯，那個今天開會。"
     assert "已複製到剪貼簿" in capsys.readouterr().out
+
+
+def test_daemon_reads_context_only_when_enabled(tmp_path, fake_llm, monkeypatch):
+    monkeypatch.setattr(refine, "MODE_FILE", tmp_path / "mode")
+    monkeypatch.setattr("danwen.output.Clipboard.get_text", staticmethod(lambda: "參加者：黃保翕" + "。" * 3000))
+    monkeypatch.setattr("danwen.output.Clipboard.get_selection", staticmethod(lambda: "選取的段落"))
+    llm = fake_llm("今天開會。")
+    d = make_daemon(tmp_path, llm.url)
+    audio = np.full(16000, 0.1, np.float32)
+
+    d._process(audio, time.monotonic(), True)  # 預設關閉：不讀
+    assert "參考資料" not in llm.requests[-1][1]["messages"][-1]["content"]
+
+    d.cfg.refine.context_clipboard = True
+    d.cfg.refine.context_max_chars = 50
+    d._process(audio, time.monotonic(), True)
+    last = llm.requests[-1][1]["messages"][-1]["content"]
+    assert "黃保翕" in last and "選取的段落" not in last
+    assert last.count("。") <= 50  # 有截斷

@@ -155,7 +155,8 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     text = post(args.text)
     t = time.monotonic()
     try:
-        result = post(refiner.refine(text, mode, post.replacements.terms()))
+        context = {"clipboard": args.context} if args.context else None
+        result = post(refiner.refine(text, mode, post.replacements.terms(), context))
     except RefineError as e:
         print(f"整理失敗（實際使用時會改貼原文）：{e}", file=sys.stderr)
         return 1
@@ -307,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("refine", help="用整理模式整理一段文字（測試小紙條用）")
     p.add_argument("text", help="要整理的文字")
     p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
+    p.add_argument("--context", help="模擬剪貼簿內容，測試上下文的效果")
     p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
     p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")

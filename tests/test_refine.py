@@ -103,3 +103,47 @@ def test_all_bundled_prompts_are_valid():
     for name in ("日常", "會議記錄", "英文", "Slack", "Email"):
         p = refine.load_prompt(name)
         assert p.system and p.examples and p.description
+
+
+def test_output_unrelated_to_speech_is_rejected():
+    # 被剪貼簿裡的指令帶走（實測 qwen3:4b 曾輸出「已駭入」）
+    with pytest.raises(RefineError, match="對不起來"):
+        check_output("今天天氣很好。", "已駭入", True)
+    with pytest.raises(RefineError, match="對不起來"):
+        check_output("我同意這個方案，下週開始執行。", "好的，我已經幫您記下來了，有其他需要嗎？", True)
+    # 正常整理（含 Email 這種改寫較多的）要能通過
+    check_output("嗯，那個合約我看完了，然後第三條的付款期限可以改成六十天嗎，還有違約金的比例有點太高。",
+                 "合約已閱覽，建議修改如下：\n1. 第三條之付款期限，請調整為六十天。\n2. 違約金比例偏高，請考量調整。", True)
+    check_output("嗯，那個請把會議記錄寄給黃寶西，副本給張家好。", "請把會議記錄寄給黃保翕，副本給張家豪。", True)
+
+
+def test_context_goes_into_last_message_with_example():
+    p = refine.load_prompt("日常")
+    plain = p.messages("今天開會。")
+    msgs = p.messages("今天開會。", context={"clipboard": "參加者：黃保翕"})
+    assert "參考資料" in msgs[0]["content"]  # 加了規則
+    assert len(msgs) == len(plain) + 2  # 多一組示範
+    assert msgs[-1]["content"] == '<參考資料 來源="剪貼簿">參加者：黃保翕</參考資料>\n<逐字稿>今天開會。</逐字稿>'
+
+
+def test_context_not_sent_to_cloud_unless_allowed(user_dirs, tmp_path, monkeypatch):
+    key = tmp_path / "key"
+    key.write_text("k", encoding="utf-8")
+    sent = []
+
+    def fake_post(self, url, payload, headers=None):
+        sent.append(payload)
+        return {"choices": [{"message": {"content": "今天開會。"}}]}
+
+    monkeypatch.setattr(Refiner, "_post", fake_post)
+    cfg = RefineConfig(provider="openai", base_url="https://api.example.com/v1", api_key_file=str(key))
+    r = Refiner(cfg)
+    assert not r.is_local and not r.context_allowed()
+    r.refine("嗯，今天開會。", "日常", context={"clipboard": "機密資料"})
+    assert "機密資料" not in str(sent[-1])  # 雲端服務：預設不送上下文
+
+    cfg.context_to_cloud = True
+    Refiner(cfg).refine("嗯，今天開會。", "日常", context={"clipboard": "機密資料"})
+    assert "機密資料" in str(sent[-1])  # 明確開啟後才送
+
+    assert Refiner(RefineConfig(base_url="http://localhost:11434")).context_allowed()
