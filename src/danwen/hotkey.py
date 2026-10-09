@@ -198,6 +198,19 @@ class HoldDetector:
         return Action.CANCEL if was_recording else None
 
 
+_KEY_NAMES = {
+    "KEY_RIGHTCTRL": "右 Ctrl", "KEY_LEFTCTRL": "左 Ctrl", "KEY_RIGHTALT": "右 Alt", "KEY_LEFTALT": "左 Alt",
+    "KEY_RIGHTSHIFT": "右 Shift", "KEY_LEFTSHIFT": "左 Shift", "KEY_RIGHTMETA": "右 Super",
+    "KEY_LEFTMETA": "左 Super", "KEY_CAPSLOCK": "Caps Lock", "KEY_SCROLLLOCK": "Scroll Lock",
+    "KEY_PAUSE": "Pause", "KEY_COMPOSE": "Menu",
+}
+
+
+def display_name(name: str) -> str:
+    """給人看的按鍵名稱（KEY_RIGHTCTRL → 右 Ctrl、KEY_F9 → F9）；與 GNOME extension 的對照一致。"""
+    return _KEY_NAMES.get(name, name.removeprefix("KEY_"))
+
+
 def key_code(name: str) -> int:
     code = ecodes.ecodes.get(name)
     if not isinstance(code, int):

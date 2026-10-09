@@ -128,6 +128,22 @@
    - 安裝在 `~/.local/share/gnome-shell/extensions/`，不碰 fcitx5；uninstall.sh 一併移除
    - Wayland 下新裝的 extension 要登出再登入才會載入；GNOME 大版本升級時需確認相容
 
+## 雲端（v3，選用，預設關閉）
+- 範圍：語音辨識與整理模式都可改用雲端；`cloud.use_for_asr`／`use_for_refine` 可只開其中一項
+- 服務商：groq（預設）、openai、cloudflare、custom（任何 OpenAI 相容服務）
+  - 辨識：OpenAI 相容 `/audio/transcriptions`（multipart）；Cloudflare `/ai/run/@cf/openai/whisper-large-v3-turbo`（JSON＋base64）
+  - 整理：OpenAI 相容 chat；Cloudflare 走 `/ai/v1/chat/completions`；去除推理模型的 `<think>` 區塊；Groq 的 gpt-oss 設 reasoning_effort=low
+- 切換：GNOME extension 選單開關、`danwen cloud on/off`、設定檔 `cloud.enabled`（預設值）；
+  執行中狀態存在 `~/.local/state/danwen/cloud`，常駐程式每秒同步給 extension，不必重啟
+- 開啟前檢查設定完整、鑰匙圈有金鑰（不連線），否則拒絕開啟；開啟時選單與錄音提示顯示「☁ 雲端」
+- 失敗處理：辨識失敗改用本機（本機模型一直保持載入）並通知；整理失敗貼原文
+- 金鑰：GNOME 鑰匙圈（Secret Service，`secretstorage`），`danwen key set` 以不回顯方式輸入；
+  常駐程式不跳解鎖視窗；不寫入設定檔與 log；uninstall.sh 詢問後刪除
+  - 已評估：檔案或 systemd 環境變數皆為明文；systemd-creds 的使用者服務支援需 systemd 256（Ubuntu 24.04 為 255）
+- 上下文仍需 `refine.context_to_cloud` 才送雲端
+- 測試：假伺服器模擬三種格式；`dev/test-keyring.sh` 在隔離的鑰匙圈（獨立 D-Bus、資料與 runtime 目錄）實測存取
+- 待實測：真正的雲端連線（需使用者的金鑰）、Cloudflare 整理模型的選擇
+- 另：長錄音短於 1.5 秒視為誤觸，丟棄不貼（`long_recording.min_duration_s`）
+
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示
-- 雲端語音辨識 backend（Groq 等 OpenAI 相容服務；錄音會離開本機，需使用者明確選用）

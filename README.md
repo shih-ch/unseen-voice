@@ -37,7 +37,7 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 | 放開 | 「嘟↓」結束，辨識後貼到游標位置 |
 | 按住期間按了其他鍵（例如 Ctrl+Space） | 視為組合鍵，取消錄音 |
 | **先短按一下右 Ctrl，0.4 秒內再按住** | 「嘟嘟嘟↑」整理模式：辨識後交給本機 LLM 整理再貼上 |
-| **很快連按兩下右 Ctrl** | 「嘟↑嘟↑」長錄音：不必按著（最長 10 分鐘），**再按一下**結束、**Esc** 取消；期間其他按鍵不影響，可先點好要貼上的位置 |
+| **很快連按兩下右 Ctrl** | 「嘟↑嘟↑」長錄音：不必按著（最長 10 分鐘），**再按一下**結束、**Esc** 取消；期間其他按鍵不影響，可先點好要貼上的位置。短於 1.5 秒視為誤觸，不貼上 |
 
 ### 整理模式
 
@@ -92,6 +92,33 @@ refine:
 - 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
 
+## 雲端（選用，預設關閉）
+
+需要更好的英文、專有名詞辨識或整理品質時，可以把**語音辨識與整理模式**改用雲端服務。
+開啟時錄音與要整理的文字會送到該服務；選單與錄音提示會顯示「☁ 雲端」。
+
+| 服務商 | 語音辨識（預設） | 整理模式（預設） | 說明 |
+|---|---|---|---|
+| `groq`（預設） | whisper-large-v3-turbo | openai/gpt-oss-20b | 便宜、有免費額度 |
+| `openai` | gpt-transcribe | gpt-4o-mini | |
+| `cloudflare` | @cf/openai/whisper-large-v3-turbo | @cf/qwen/qwen3-30b-a3b-fp8 | 需填 `cloud.account_id`；整理模型待實測 |
+| `custom` | 自訂 | 自訂 | 任何 OpenAI 相容服務（填 `cloud.base_url` 與模型） |
+
+```bash
+danwen key set groq     # 輸入 API Key（不顯示），存進 GNOME 鑰匙圈
+danwen cloud            # 查看設定與金鑰狀態
+danwen cloud test       # 實測連線（可加 錄音.wav）；會產生極少量費用
+danwen cloud on         # 開啟（也可在 GNOME extension 選單切換）
+danwen cloud off
+danwen key status / danwen key delete groq
+```
+
+- **金鑰**存在 GNOME 鑰匙圈（以登入密碼加密），不寫進設定檔或 log。建議建立**權限最小**的金鑰
+  （Cloudflare 只給 Workers AI 權限），並在服務商後台設定**用量上限**
+- **失敗時**（斷網、額度用完、金鑰錯誤）語音辨識自動改用本機並通知，照樣貼上；整理失敗則貼原文
+- **上下文**（剪貼簿、選取文字）仍需另外開啟 `refine.context_to_cloud` 才會送到雲端
+- 雲端設定在 `config.yaml` 的 `cloud` 區段；`enabled` 是預設值，執行中切換的狀態存在 `~/.local/state/danwen/cloud`
+
 ## 歷史紀錄
 
 保留最近 20 次聽寫的文字（`~/.local/state/danwen/history/`，只有你自己能讀；預設**不存錄音**）。
@@ -132,6 +159,8 @@ danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit�
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
 danwen dict               # 替換字典：列出、新增、刪除
 danwen history            # 歷史紀錄：列出最近 20 次聽寫
+danwen cloud / key        # 雲端：狀態、開關、實測；API Key 存取（GNOME 鑰匙圈）
+danwen bench -b C         # 用雲端語音辨識跑 benchmark
 danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A
 danwen download -b B      # 預先下載模型
@@ -186,6 +215,7 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 | `danwen.service`、`danwen-whisper.service` | 停止、停用、刪除 |
 | GNOME extension：`~/.local/share/gnome-shell/extensions/danwen@danwen.github.io`，加入 enabled-extensions | 從 enabled／disabled-extensions 拿掉 danwen 這一項（執行中的 GNOME 立刻卸載）並刪除檔案；其他 extension 不受影響 |
 | 設定檔 `~/.config/danwen` | 詢問後刪除（預設保留，可能有你的替換字典） |
+| `danwen key set` 存進 GNOME 鑰匙圈的 API Key | 詢問後刪除（預設刪除） |
 | 模型 `~/.cache/danwen`、whisper.cpp `~/.local/share/danwen`、紀錄 `~/.local/state/danwen` | 刪除 |
 
 結束時同樣會比對輸入法設定並印出結果。共用的快取（`~/.cache/uv`、`~/.cache/mesa_shader_cache`）
@@ -199,6 +229,7 @@ uv run pytest
 uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
 dev/nested-shell.sh       # 在視窗裡跑隔離的 GNOME Shell 測試 extension（搭配假的 danwen，不影響目前的桌面）
 DANWEN_FAKE_CYCLE=1 dev/nested-shell.sh   # 假 danwen 自動輪流切換狀態，看圖示變色
+dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取（不碰真正的鑰匙圈）
 ```
 
 ## 架構
@@ -219,6 +250,8 @@ DANWEN_FAKE_CYCLE=1 dev/nested-shell.sh   # 假 danwen 自動輪流切換狀態�
 | `src/danwen/postprocess.py` | 去標籤、OpenCC、替換字典 |
 | `src/danwen/refine.py` | 整理模式：小紙條、Ollama／OpenAI 相容 API、防呆 |
 | `src/danwen/history.py` | 歷史紀錄（JSON，檔案鎖，只有自己能讀） |
+| `src/danwen/cloud.py`、`asr/cloud.py` | 雲端服務商設定、雲端語音辨識（OpenAI 相容／Cloudflare） |
+| `src/danwen/credentials.py` | API Key 存取（GNOME 鑰匙圈） |
 | `src/danwen/data/prompts/` | 內建小紙條 |
 | `src/danwen/output.py` | 剪貼簿與虛擬鍵盤 |
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |

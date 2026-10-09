@@ -113,6 +113,24 @@ done
 run systemctl --user daemon-reload
 run systemctl --user reset-failed danwen.service danwen-whisper.service 2>/dev/null || true
 
+# ---- 雲端 API Key（GNOME 鑰匙圈）：要在移除 danwen 指令之前處理 ----
+say "GNOME 鑰匙圈裡的 API Key"
+DANWEN_BIN="$(uv tool dir --bin 2>/dev/null)/danwen"
+if [ -x "$DANWEN_BIN" ]; then
+    if "$DANWEN_BIN" key status 2>/dev/null | grep -q "✓ 已設定"; then
+        "$DANWEN_BIN" key status 2>/dev/null | grep "✓ 已設定" | sed 's/^ */    /'
+        if ask "要從鑰匙圈刪除這些金鑰嗎？刪除後要重新申請或重新輸入 [Y/n]" Y; then
+            run "$DANWEN_BIN" key delete --all
+        else
+            info "保留（之後可在「密碼和金鑰」程式裡手動刪除「但聞人語 API Key」）"
+        fi
+    else
+        info "沒有設定任何金鑰"
+    fi
+else
+    info "找不到 danwen 指令，無法檢查；如有設定過金鑰，請在「密碼和金鑰」程式裡刪除「但聞人語 API Key」"
+fi
+
 # ---- 2. 移除 danwen 指令 ----
 say "移除 danwen 指令"
 if uv tool list 2>/dev/null | grep -q '^danwen '; then

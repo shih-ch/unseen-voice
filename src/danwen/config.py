@@ -38,6 +38,7 @@ class AudioConfig:
 class LongRecordingConfig:
     enabled: bool = True
     max_duration_s: float = 600.0
+    min_duration_s: float = 1.5
     refine: bool = False
 
 
@@ -85,6 +86,20 @@ class RefineConfig:
 
 
 @dataclass
+class CloudConfig:
+    enabled: bool = False
+    provider: str = "groq"
+    account_id: str | None = None
+    base_url: str | None = None
+    asr_model: str | None = None
+    llm_model: str | None = None
+    asr_prompt: str = "以下是繁體中文的句子。"
+    use_for_asr: bool = True
+    use_for_refine: bool = True
+    timeout_s: float = 30.0
+
+
+@dataclass
 class OutputConfig:
     restore_clipboard: bool = True
     restore_delay_ms: int = 500
@@ -115,6 +130,7 @@ class Config:
     asr: ASRConfig = field(default_factory=ASRConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     refine: RefineConfig = field(default_factory=RefineConfig)
+    cloud: CloudConfig = field(default_factory=CloudConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)

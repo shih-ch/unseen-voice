@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=1.26",
     "opencc>=1.1.9",
     "pyyaml>=6.0",
+    "secretstorage>=3.3",
     "sherpa-onnx==1.13.8",
     "sherpa-onnx-core==1.13.8",  # 內含 onnxruntime；PyPI 中繼資料漏列，需明確指定
     "sounddevice>=0.5",

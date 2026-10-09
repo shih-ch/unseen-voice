@@ -7,6 +7,7 @@
 # 用法：dev/nested-shell.sh                    關掉視窗即結束，暫存資料自動刪除
 #      SIZE=1600x1000 dev/nested-shell.sh
 #      DANWEN_FAKE_CYCLE=1 dev/nested-shell.sh   假 danwen 自動輪流切換狀態（看圖示變色）
+#      DANWEN_FAKE_NO_KEY=once dev/nested-shell.sh  第一次開雲端時模擬「還沒設定金鑰」
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

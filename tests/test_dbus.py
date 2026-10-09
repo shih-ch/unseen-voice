@@ -25,6 +25,12 @@ class StubDaemon:
     def current_mode(self):
         return self.mode
 
+    def cloud_enabled(self):
+        return False
+
+    def cloud_label(self):
+        return "Groq"
+
     def list_modes(self):
         return [("日常", "預設"), ("英文", "翻譯")]
 

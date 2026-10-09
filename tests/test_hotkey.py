@@ -1,6 +1,6 @@
 from evdev import ecodes
 
-from danwen.hotkey import KEY_DOWN, KEY_REPEAT, KEY_UP, Action, HoldDetector, key_code
+from danwen.hotkey import KEY_DOWN, KEY_REPEAT, KEY_UP, Action, HoldDetector, display_name, key_code
 
 HOT = ecodes.KEY_RIGHTCTRL
 SPACE = ecodes.KEY_SPACE
@@ -249,3 +249,8 @@ def test_external_cancel_and_hold_mode():
 
 def test_external_start_long_disabled():
     assert make_dt().start_long(0.0) is None
+
+
+def test_display_name():
+    assert display_name("KEY_RIGHTCTRL") == "右 Ctrl"
+    assert display_name("KEY_F9") == "F9"

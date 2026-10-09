@@ -17,12 +17,14 @@ from pathlib import Path
 
 import numpy as np
 
+from . import cloud
 from .asr import ASRUnavailable, create_backend
+from .asr.cloud import CloudASRBackend
 from .audio import Recorder, dbfs
 from .config import Config, ConfigError
 from .feedback import Feedback
 from .history import History, redo_entry
-from .hotkey import Action, HoldDetector, KeyboardListener, key_code
+from .hotkey import Action, HoldDetector, KeyboardListener, display_name, key_code
 from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
 from .refine import RefineError, Refiner, available_prompts, current_mode, load_prompt, set_mode
@@ -35,7 +37,7 @@ class Daemon:
         self.cfg = cfg
         self.feedback = Feedback(cfg.feedback.sounds, cfg.feedback.notify_errors)
         self.recorder = Recorder(cfg.audio.sample_rate, cfg.audio.device)
-        self.backend = create_backend(cfg.asr.backend, cfg.asr)
+        self.backend = create_backend(cfg.asr.backend, cfg)
         replacements = cfg.postprocess.replacements
         self.post = PostProcessor(
             cfg.postprocess.opencc, Path(replacements).expanduser() if replacements else None
@@ -48,6 +50,8 @@ class Daemon:
             cfg.long_recording.max_duration_s if cfg.long_recording.enabled else 0.0,
         )
         self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
+        # 雲端（預設關閉）：本機的 backend 與 Refiner 一直保留，雲端失敗時改用本機
+        self.cloud_asr = CloudASRBackend(cfg.cloud, terms=self.post.replacements.terms)
         self.history = (
             History(size=cfg.history.size, keep_audio=cfg.history.keep_audio) if cfg.history.size > 0 else None
         )
@@ -58,7 +62,7 @@ class Daemon:
         self._state_lock = threading.Lock()
         self._listener: KeyboardListener | None = None
         self._refining = False
-        self._jobs: queue.Queue[tuple[np.ndarray, float, bool] | None] = queue.Queue()
+        self._jobs: queue.Queue[tuple[np.ndarray, float, bool, str] | None] = queue.Queue()
         self._stop = threading.Event()
 
     def _start_dbus(self) -> None:
@@ -73,6 +77,14 @@ class Daemon:
             log.warning("D-Bus 介面無法啟用（GNOME extension 會連不上），聽寫不受影響：%s", e)
             return
         self.dbus = service
+
+    def _watch_settings(self) -> None:
+        last = None
+        while not self._stop.wait(1.0):
+            current = {"Mode": self.current_mode(), "Cloud": self.cloud_enabled()}
+            if last is not None and current != last:
+                self.dbus.notify_properties({k: v for k, v in current.items() if last.get(k) != v})
+            last = current
 
     def _set_state(self, state: str, kind: str | None = None) -> None:
         with self._state_lock:
@@ -103,6 +115,8 @@ class Daemon:
             signal.signal(sig, lambda *_: self._stop.set())
         listener = KeyboardListener(self.detector, self._on_action, ignore_names={VKBD_NAME})
         self._listener = listener
+        if self.dbus:
+            threading.Thread(target=self._watch_settings, name="watch", daemon=True).start()
         log.info(
             "就緒：按住 %s 說話%s%s", self.cfg.hotkey.key,
             "；先短按一下再按住＝整理模式" if self.refiner else "",
@@ -135,14 +149,14 @@ class Daemon:
             self.feedback.start(refine=self._refining, long=long)
             # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
             if long and not (self.dbus and self.dbus.overlay_present()):
-                self.feedback.info("長錄音中：再按一下熱鍵結束，Esc 取消")
-            if self._refining:
+                self.feedback.info(f"長錄音中：再按一下 {display_name(self.cfg.hotkey.key)} 結束，Esc 取消")
+            if self._refining and not self._cloud_refine():
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
             audio = self.recorder.stop()
             self.feedback.stop()
             self._set_state("processing")
-            self._jobs.put((audio, now, self._refining))
+            self._jobs.put((audio, now, self._refining, self.kind))
         elif action is Action.CANCEL:
             self.recorder.stop()
             self._set_state("idle")
@@ -182,18 +196,46 @@ class Daemon:
             log.info("上下文：%s", "、".join(f"{k} {len(v)} 字" for k, v in context.items()))
         return context or None
 
-    def _process(self, audio: np.ndarray, released: float, refine: bool) -> None:
+    # ---- 雲端 ----
+
+    def cloud_enabled(self) -> bool:
+        return cloud.is_enabled(self.cfg.cloud)
+
+    def cloud_label(self) -> str:
+        return cloud.label(self.cfg.cloud)
+
+    def set_cloud(self, on: bool) -> None:
+        if on:
+            cloud.check_ready(self.cfg.cloud)  # 免得開了才發現不能用
+        cloud.set_enabled(on)
+        log.info("雲端：%s（%s）", "開" if on else "關", self.cloud_label())
+
+    def _cloud_refine(self) -> bool:
+        return self.cloud_enabled() and self.cfg.cloud.use_for_refine
+
+    def _transcribe(self, audio: np.ndarray, sr: int) -> tuple[str, str]:
+        """雲端開啟時先用雲端辨識，失敗就改用本機（本機模型一直保持載入）。"""
+        if self.cloud_enabled() and self.cfg.cloud.use_for_asr:
+            try:
+                return self.cloud_asr.transcribe(audio, sr), self.cloud_asr.name
+            except (cloud.CloudError, ConfigError) as e:
+                self.feedback.notice(f"雲端辨識失敗，改用本機（{e}）")
+        return self.backend.transcribe(audio, sr), self.backend.name
+
+    def _process(self, audio: np.ndarray, released: float, refine: bool, kind: str = "fast") -> None:
         sr = self.cfg.audio.sample_rate
         duration = audio.size / sr
-        if duration < self.cfg.audio.min_duration_s:
-            log.info("錄音 %.2f 秒，短於 %.1f 秒，丟棄", duration, self.cfg.audio.min_duration_s)
+        # 長錄音不必按著，連按想停止時很容易又開始一段很短的；這種當作誤觸
+        minimum = self.cfg.long_recording.min_duration_s if kind == "long" else self.cfg.audio.min_duration_s
+        if duration < minimum:
+            log.info("錄音 %.2f 秒，短於 %.1f 秒，視為誤觸丟棄", duration, minimum)
             return
         level = dbfs(audio)
         if level < self.cfg.audio.silence_dbfs:
             log.info("錄音音量 %.1f dBFS，視為沒講話，略過", level)
             return
         t0 = time.monotonic()
-        raw = self.backend.transcribe(audio, sr)
+        raw, asr_name = self._transcribe(audio, sr)
         t1 = time.monotonic()
         text = plain = self.post(raw)
         t2 = time.monotonic()
@@ -202,9 +244,10 @@ class Daemon:
         if refine and text:
             mode = current_mode(self.cfg.refine.mode)
             try:
+                refiner = cloud.make_refiner(self.cfg) if self._cloud_refine() else self.refiner
                 # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
                 terms = self.post.replacements.terms()
-                text = self.post(self.refiner.refine(text, mode, terms, self._context()))
+                text = self.post(refiner.refine(text, mode, terms, self._context()))
                 refined_with = mode
             except (RefineError, ConfigError) as e:
                 self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
@@ -214,15 +257,15 @@ class Daemon:
         t4 = time.monotonic()
         log.info(
             "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 整理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s%s",
-            duration, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - released, len(text), self.backend.name,
-            f" 小紙條={mode}" if mode else "",
+            duration, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - released, len(text), asr_name,
+            f" 小紙條={mode}{'（雲端）' if self._cloud_refine() else ''}" if mode else "",
         )
         if self.cfg.log.log_text:
             log.info("文字：%s", text)
         if self.history and text:
             try:
                 self.history.add(
-                    duration_s=duration, backend=self.backend.name, raw=plain, text=text,
+                    duration_s=duration, backend=asr_name, raw=plain, text=text,
                     mode=refined_with, audio=audio, sample_rate=sr,
                 )
             except OSError:

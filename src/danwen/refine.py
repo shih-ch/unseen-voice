@@ -17,6 +17,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,12 +149,24 @@ def check_output(source: str, output: str, check_language: bool) -> None:
                 raise RefineError("輸出的內容跟口述對不起來，可能被參考資料或內容裡的指令帶走")
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+
+
 class Refiner:
-    def __init__(self, cfg: RefineConfig):
+    def __init__(
+        self,
+        cfg: RefineConfig,
+        api_key: Callable[[], str] | None = None,
+        extra: dict | None = None,
+    ):
+        """api_key：提供 API Key 的函式（雲端用，從鑰匙圈讀取）；沒有時讀 cfg.api_key_file。
+        extra：附加在 OpenAI 相容請求裡的服務商參數（例如 Groq 的 reasoning_effort）。"""
         if cfg.provider not in ("ollama", "openai"):
             raise ConfigError(f"refine.provider 只能是 ollama 或 openai，不是 {cfg.provider}")
         self.cfg = cfg
         self.base_url = cfg.base_url.rstrip("/")
+        self._api_key_getter = api_key
+        self._extra = extra or {}
 
     def _post(self, url: str, payload: dict, headers: dict[str, str] | None = None) -> dict:
         req = urllib.request.Request(
@@ -222,19 +235,25 @@ class Refiner:
         else:
             result = self._post(
                 f"{self.base_url}/chat/completions",
-                {"model": self.cfg.model, "messages": messages, "temperature": 0},
+                {"model": self.cfg.model, "messages": messages, "temperature": 0, **self._extra},
                 {"Authorization": f"Bearer {self._api_key()}"},
             )
             try:
                 output = result["choices"][0]["message"]["content"] or ""
             except (KeyError, IndexError, TypeError) as e:
                 raise RefineError(f"LLM 回應格式不對：{str(result)[:200]}") from e
-        # 去掉行尾空白（模型常為了 Markdown 換行在行尾加兩個空白）
+        # 推理模型可能把思考過程放在 <think> 裡；也去掉行尾空白（模型常為了 Markdown 換行加兩個空白）
+        output = _THINK_RE.sub("", output)
         output = "\n".join(line.rstrip() for line in output.strip().splitlines())
         check_output(text, output, prompt.check_language)
         return output
 
     def _api_key(self) -> str:
+        if self._api_key_getter is not None:
+            try:
+                return self._api_key_getter()
+            except RuntimeError as e:  # CloudError（沒有金鑰、鑰匙圈鎖住）
+                raise RefineError(str(e)) from e
         if not self.cfg.api_key_file:
             raise RefineError("provider 為 openai 時需要設定 refine.api_key_file")
         try:

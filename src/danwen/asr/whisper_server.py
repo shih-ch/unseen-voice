@@ -12,13 +12,13 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-import uuid
 
 import numpy as np
 
 from .. import models
 from ..audio import resample, to_wav_bytes
 from ..config import WhisperServerConfig
+from ..httpclient import multipart
 from .base import ASRBackend, ASRUnavailable
 
 log = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class WhisperServerBackend(ASRBackend):
             "language": self.cfg.language,
             "prompt": self.cfg.prompt,
         }
-        body, content_type = _multipart(fields, "file", "audio.wav", wav)
+        body, content_type = multipart(fields, "file", "audio.wav", wav)
         req = urllib.request.Request(
             self.url + "/inference", data=body, headers={"Content-Type": content_type}
         )
@@ -91,20 +91,3 @@ class WhisperServerBackend(ASRBackend):
         if self._started_unit:
             subprocess.run(["systemctl", "--user", "stop", UNIT], check=False)
             self._started_unit = False
-
-
-def _multipart(fields: dict[str, str], file_field: str, filename: str, data: bytes) -> tuple[bytes, str]:
-    boundary = uuid.uuid4().hex
-    parts = []
-    for name, value in fields.items():
-        parts.append(
-            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
-        )
-    parts.append(
-        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
-        f"Content-Type: audio/wav\r\n\r\n".encode()
-        + data
-        + b"\r\n"
-    )
-    parts.append(f"--{boundary}--\r\n".encode())
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"

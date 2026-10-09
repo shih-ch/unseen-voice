@@ -1,4 +1,4 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | history | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | history | cloud | key | init-config"""
 
 from __future__ import annotations
 
@@ -151,7 +151,12 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     from .refine import RefineError, Refiner, current_mode
 
     post = _postprocessor(cfg)
-    refiner = Refiner(cfg.refine)
+    if args.cloud:
+        from . import cloud
+
+        refiner = cloud.make_refiner(cfg)
+    else:
+        refiner = Refiner(cfg.refine)
     mode = args.mode or current_mode(cfg.refine.mode)
     text = post(args.text)
     t = time.monotonic()
@@ -274,6 +279,104 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def cmd_key(args: argparse.Namespace, cfg: config.Config) -> int:
+    import getpass
+
+    from . import cloud
+    from .credentials import CredentialError, KeyringStore
+
+    store = KeyringStore()
+    provider = args.provider or cfg.cloud.provider
+    if provider not in cloud.PRESETS:
+        print(f"服務商只能是 {'、'.join(cloud.PRESETS)}", file=sys.stderr)
+        return 2
+    name = cloud.PRESETS[provider].label
+    try:
+        if args.action == "set":
+            key = getpass.getpass(f"請輸入 {name} 的 API Key（輸入時不會顯示）：").strip()
+            if not key:
+                print("沒有輸入，未變更")
+                return 1
+            store.set(provider, key)
+            print(f"已把 {name} 的 API Key 存進 GNOME 鑰匙圈")
+        elif args.action == "delete":
+            deleted = store.delete(None if args.all else provider)
+            print(f"已從 GNOME 鑰匙圈刪除：{'、'.join(deleted)}" if deleted else "沒有可刪除的金鑰")
+        else:
+            have = store.providers()
+            print("GNOME 鑰匙圈裡的 API Key（只顯示有沒有設定，不顯示內容）：")
+            for key_name, preset in cloud.PRESETS.items():
+                print(f"  {'✓ 已設定' if key_name in have else '  未設定'}  {preset.label}（{key_name}）")
+    except CredentialError as e:
+        print(e, file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_cloud(args: argparse.Namespace, cfg: config.Config) -> int:
+    import time
+
+    import numpy as np
+
+    from . import cloud
+    from .asr.cloud import CloudASRBackend
+    from .refine import RefineError
+
+    try:
+        if args.action == "on":
+            cloud.check_ready(cfg.cloud)
+            cloud.set_enabled(True)
+            print(f"已開啟雲端（{cloud.label(cfg.cloud)}）：之後的錄音與要整理的文字會送到雲端")
+            return 0
+        if args.action == "off":
+            cloud.set_enabled(False)
+            print("已關閉雲端：全部回到本機")
+            return 0
+        if args.action == "test":
+            endpoint = cloud.check_ready(cfg.cloud)
+            print(f"測試 {endpoint.label}（會實際呼叫，產生極少量費用）")
+            if args.wav:
+                from .audio import read_wav
+
+                audio, sr = read_wav(args.wav)
+            else:
+                audio, sr = np.zeros(16000, dtype=np.float32), 16000  # 1 秒靜音：只測連線與金鑰
+            t = time.monotonic()
+            text = CloudASRBackend(cfg.cloud).transcribe(audio, sr)
+            print(f"  語音辨識 {endpoint.asr_model}：{time.monotonic() - t:.2f} 秒 → {text or '（空白）'}")
+            t = time.monotonic()
+            result = cloud.make_refiner(cfg).refine("嗯，那個今天天氣很好，然後我們去散步。", "日常")
+            print(f"  整理模式 {endpoint.llm_model}：{time.monotonic() - t:.2f} 秒 → {result}")
+            return 0
+    except (cloud.CloudError, RefineError) as e:
+        print(f"失敗：{e}", file=sys.stderr)
+        return 1
+
+    endpoint = None
+    try:
+        endpoint = cloud.resolve(cfg.cloud)
+    except config.ConfigError as e:
+        problem = str(e)
+    else:
+        problem = ""
+    try:
+        cloud.api_key(cfg.cloud.provider)
+        key_status = "已設定"
+    except cloud.CloudError as e:
+        key_status = f"未設定（{e}）"
+    on = cloud.is_enabled(cfg.cloud)
+    print(f"雲端：{'☁ 開啟' if on else '關閉（全部在本機）'}　服務商：{cloud.label(cfg.cloud)}")
+    if endpoint:
+        print(f"  語音辨識：{endpoint.asr_model}{'' if cfg.cloud.use_for_asr else '（設定為不使用）'}")
+        print(f"  整理模式：{endpoint.llm_model}{'' if cfg.cloud.use_for_refine else '（設定為不使用）'}")
+        print(f"  網址：{endpoint.base_url}")
+    else:
+        print(f"  設定不完整：{problem}")
+    print(f"  API Key：{key_status}")
+    print("切換：danwen cloud on／off　實測：danwen cloud test [錄音.wav]")
+    return 0
+
+
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
@@ -311,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("text", help="要整理的文字")
     p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
     p.add_argument("--context", help="模擬剪貼簿內容，測試上下文的效果")
+    p.add_argument("--cloud", action="store_true", help="改用雲端 LLM（設定檔的 cloud 區段）")
     p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
     p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")
@@ -318,6 +422,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
     p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
     p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式）")
+    p = sub.add_parser("cloud", help="雲端：查看狀態、開／關、實測連線")
+    p.add_argument("action", nargs="?", choices=("status", "on", "off", "test"), default="status")
+    p.add_argument("wav", nargs="?", type=Path, help="test 時用來測語音辨識的錄音（預設為 1 秒靜音）")
+    p = sub.add_parser("key", help="API Key：存進／查看／刪除（GNOME 鑰匙圈）")
+    p.add_argument("action", nargs="?", choices=("status", "set", "delete"), default="status")
+    p.add_argument("provider", nargs="?", help="groq、openai、cloudflare、custom（預設為設定檔的 cloud.provider）")
+    p.add_argument("--all", action="store_true", help="delete 時刪除 danwen 的全部金鑰")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)
@@ -338,6 +449,8 @@ def main(argv: list[str] | None = None) -> int:
         "refine": cmd_refine,
         "dict": cmd_dict,
         "history": cmd_history,
+        "cloud": cmd_cloud,
+        "key": cmd_key,
         "init-config": cmd_init_config,
     }[command]
     try:

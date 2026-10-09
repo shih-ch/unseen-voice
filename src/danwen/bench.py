@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .asr import ASRUnavailable, create_backend
 from .audio import read_wav
-from .config import Config
+from .cloud import CloudError
+from .config import Config, ConfigError
 from .postprocess import PostProcessor
 
 
@@ -29,12 +30,12 @@ def run(cfg: Config, inputs: list[Path], backends: list[str]) -> int:
     name_width = max(len(f.name) for f in files)
 
     for name in backends:
-        backend = create_backend(name, cfg.asr)
+        backend = create_backend(name, cfg)
         print(f"\n=== {backend.name} ===")
         t = time.monotonic()
         try:
             backend.prepare()
-        except ASRUnavailable as e:
+        except (ASRUnavailable, ConfigError) as e:
             print(f"略過：{e}")
             continue
         print(f"載入＋暖機：{time.monotonic() - t:.2f} 秒")
@@ -43,7 +44,11 @@ def run(cfg: Config, inputs: list[Path], backends: list[str]) -> int:
             for f, audio, sr in clips:
                 duration = audio.size / sr
                 t0 = time.monotonic()
-                raw = backend.transcribe(audio, sr)
+                try:
+                    raw = backend.transcribe(audio, sr)
+                except CloudError as e:
+                    print(f"{f.name}：{e}")
+                    break
                 t1 = time.monotonic()
                 text = post(raw)
                 t2 = time.monotonic()

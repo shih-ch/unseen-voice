@@ -58,6 +58,19 @@ class _Interface(ServiceInterface):
     def Hotkey(self) -> "s":  # evdev 按鍵名稱，例如 KEY_RIGHTCTRL
         return self._daemon.cfg.hotkey.key
 
+    @dbus_property(access=PropertyAccess.READ)
+    def Cloud(self) -> "b":  # 是否使用雲端（錄音、文字會送出電腦）
+        return self._daemon.cloud_enabled()
+
+    @dbus_property(access=PropertyAccess.READ)
+    def CloudProvider(self) -> "s":  # 服務商名稱，例如 Groq
+        return self._daemon.cloud_label()
+
+    @method()
+    def SetCloud(self, on: "b"):
+        self._call(self._daemon.set_cloud, on)
+        self.emit_properties_changed({"Cloud": on})
+
     @method()
     def ListModes(self) -> "a(ss)":
         return [[name, description] for name, description in self._call(self._daemon.list_modes)]
@@ -149,6 +162,10 @@ class DBusService:
     def notify_state(self) -> None:
         if self._iface is not None:
             changed = {"State": self._daemon.state, "Kind": self._daemon.kind}
+            self._soon(self._iface.emit_properties_changed, changed)
+
+    def notify_properties(self, changed: dict) -> None:
+        if self._iface is not None and changed:
             self._soon(self._iface.emit_properties_changed, changed)
 
     def notify_history(self) -> None:

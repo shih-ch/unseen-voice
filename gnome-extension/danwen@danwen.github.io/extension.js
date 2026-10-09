@@ -26,6 +26,9 @@ const IFACE_XML = `
     <property name="Kind" type="s" access="read"/>
     <property name="Mode" type="s" access="read"/>
     <property name="Hotkey" type="s" access="read"/>
+    <property name="Cloud" type="b" access="read"/>
+    <property name="CloudProvider" type="s" access="read"/>
+    <method name="SetCloud"><arg type="b" name="on" direction="in"/></method>
     <method name="ListModes"><arg type="a(ss)" direction="out"/></method>
     <method name="SetMode"><arg type="s" name="name" direction="in"/></method>
     <method name="GetHistory">
@@ -100,8 +103,9 @@ class DanwenOsd extends St.BoxLayout {
         Main.layoutManager.uiGroup.add_child(this);
     }
 
-    update(state, kind, mode, hotkey) {
+    update(state, kind, mode, hotkey, cloud) {
         this._hotkey = hotkey;
+        this._cloud = cloud;
         if (state === 'recording' && this._state !== 'recording')
             this._since = GLib.get_monotonic_time();
         this._state = state;
@@ -134,14 +138,15 @@ class DanwenOsd extends St.BoxLayout {
             this._dot.add_style_class_name('processing');
 
         const elapsed = formatElapsed(GLib.get_monotonic_time() - this._since);
+        const where = this._cloud ? '☁ ' : '';
         if (!recording)
-            this._label.text = this._kind === 'refine' ? `整理中（${this._mode}）` : '辨識中';
+            this._label.text = where + (this._kind === 'refine' ? `整理中（${this._mode}）` : '辨識中');
         else if (this._kind === 'long')
-            this._label.text = `長錄音 ${elapsed}　·　再按一下 ${keyName(this._hotkey)} 結束，Esc 取消`;
+            this._label.text = `${where}長錄音 ${elapsed}　·　再按一下 ${keyName(this._hotkey)} 結束，Esc 取消`;
         else if (this._kind === 'refine')
-            this._label.text = `錄音中 ${elapsed}　·　整理：${this._mode}`;
+            this._label.text = `${where}錄音中 ${elapsed}　·　整理：${this._mode}`;
         else
-            this._label.text = `錄音中 ${elapsed}`;
+            this._label.text = `${where}錄音中 ${elapsed}`;
         this._position();
     }
 
@@ -260,6 +265,11 @@ class DanwenIndicator extends PanelMenu.Button {
         this._actions = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._actions);
 
+        // 打開時錄音與要整理的文字會送到雲端；切換失敗（例如還沒設定金鑰）會自動跳回
+        this._cloudSwitch = new PopupMenu.PopupSwitchMenuItem('使用雲端', false);
+        this._cloudSwitch.connect('toggled', (_item, on) => this._setCloud(on));
+        this.menu.addMenuItem(this._cloudSwitch);
+
         this._modeMenu = new PopupMenu.PopupSubMenuMenuItem('小紙條');
         this.menu.addMenuItem(this._modeMenu);
 
@@ -292,10 +302,11 @@ class DanwenIndicator extends PanelMenu.Button {
 
         const running = this._running;
         if (running)
-            this._osd.update(this._proxy.State, this._proxy.Kind, this._proxy.Mode, this._proxy.Hotkey);
+            this._osd.update(this._proxy.State, this._proxy.Kind, this._proxy.Mode, this._proxy.Hotkey,
+                Boolean(this._proxy.Cloud));
         else
-            this._osd.update('offline', '', '', '');
-        for (const part of [this._modeMenu, this._historyHeader, this._history.actor])
+            this._osd.update('offline', '', '', '', false);
+        for (const part of [this._modeMenu, this._historyHeader, this._history.actor, this._cloudSwitch])
             part.visible = running;
         if (!running)
             this._redoMenu.visible = false; // 有紀錄時由 _refreshLists 打開
@@ -307,11 +318,13 @@ class DanwenIndicator extends PanelMenu.Button {
             return;
         }
 
-        const {State: current, Kind: kind, Mode: mode} = this._proxy;
+        const {State: current, Kind: kind, Mode: mode, Cloud: cloud, CloudProvider: provider} = this._proxy;
         const status = current === 'recording'
             ? `${STATE_LABELS.recording}（${KIND_LABELS[kind] ?? kind}）`
             : STATE_LABELS[current] ?? current;
-        this._statusItem.label.text = `${status}　·　小紙條：${mode}`;
+        this._statusItem.label.text = `${status}　·　小紙條：${mode}${cloud ? `　·　☁ 雲端（${provider}）` : ''}`;
+        this._cloudSwitch.label.text = provider ? `使用雲端（${provider}）` : '使用雲端';
+        this._cloudSwitch.setToggleState(Boolean(cloud));
         this._modeMenu.label.text = `小紙條：${mode}`;
         for (const [name, item] of this._modeItems)
             item.setOrnament(name === mode ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
@@ -380,6 +393,16 @@ class DanwenIndicator extends PanelMenu.Button {
         }
     }
 
+    async _setCloud(on) {
+        if (await this._call('SetCloudAsync', on) === null) {
+            this._cloudSwitch.setToggleState(!on); // 切換失敗，回到原本的狀態
+            return;
+        }
+        Main.notify(APP_NAME, on
+            ? `已改用雲端（${this._proxy.CloudProvider}）：錄音與要整理的文字會送到雲端`
+            : '已改回本機：全部在這台電腦上處理');
+    }
+
     async _redo(mode) {
         Main.notify(APP_NAME, `用「${mode}」重新整理中…`);
         const result = await this._call('RedoAsync', 0, mode);
@@ -395,6 +418,10 @@ class DanwenIndicator extends PanelMenu.Button {
     }
 
     _open(path) {
+        if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+            Main.notifyError(APP_NAME, `還沒有 ${path}，請先在終端機執行：danwen init-config`);
+            return;
+        }
         try {
             Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(path, null), null);
         } catch (e) {
