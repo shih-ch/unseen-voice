@@ -138,8 +138,12 @@
   - 整理：OpenAI 相容 chat；Cloudflare 走 `/ai/v1/chat/completions`；去除推理模型的 `<think>`；Groq gpt-oss 設 reasoning_effort=low
   - 一律帶 `User-Agent: danwen/版本`：Groq 前面的 Cloudflare 會擋 Python 預設 UA（error 1010）
 - 切換：extension「方案」子選單、`danwen cloud <方案>`；切換前檢查設定與金鑰（不連線），缺少就不切換並說明原因
-- 錄音開始時決定這次整理走雲端或本機：方案要雲端但缺金鑰時改用本機並只通知一次（同一原因）
-- 失敗處理：雲端辨識失敗改用本機；雲端整理失敗改用本機，本機也失敗才貼原文
+- 錄音開始時決定這次整理走 cloud／local／none：方案要雲端但不能用（缺金鑰等）時，
+  `refine.local_fallback`（預設 false，使用者指定）為 false 就貼原文、不喚醒本機 Ollama，為 true 才改用本機；同一原因只通知一次
+- 失敗處理：雲端辨識失敗改用本機（SenseVoice 一直載入）；雲端整理失敗依 local_fallback 貼原文或改用本機
+- 歷史紀錄重新整理、`danwen refine` 也依方案（cloud.choose_refiner）；`--local／--cloud` 可強制
+- 測試隔離（conftest 自動套用）：不讀真正的鑰匙圈、方案／小紙條／歷史狀態放暫存資料夾、只准連 127.0.0.1——
+  曾有測試因方案預設 B 而讀到使用者的真金鑰並呼叫 Groq（約 4 次，內容為測試句）
 - 錯誤訊息不含服務回傳內容（實測 Groq 的 429 訊息含組織代碼）
 - 錄音提示只在這次錄音真的送資料出去時顯示「☁」（雲端辨識，或整理模式且整理走雲端）
 - 金鑰：GNOME 鑰匙圈（`secretstorage`），`danwen key set` 不回顯；常駐程式不跳解鎖視窗；uninstall.sh 詢問後刪除

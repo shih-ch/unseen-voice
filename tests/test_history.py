@@ -89,6 +89,7 @@ def make_daemon(tmp_path, llm_url):
     cfg.feedback.sounds = False
     cfg.feedback.notify_errors = False
     cfg.refine.base_url = llm_url
+    cfg.cloud.plan = "local"  # 這裡測本機流程；方案與雲端在 test_cloud.py
     d = Daemon(cfg)
     d.backend = FakeBackend()
     d.paster = StubPaster()
@@ -119,7 +120,7 @@ def test_cli_redo_with_another_prompt(tmp_path, fake_llm, monkeypatch, capsys):
     h = History(size=10)
     add(h, "嗯，那個今天開會。")
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text(f"refine:\n  base_url: {llm.url}\n", encoding="utf-8")
+    cfg_file.write_text(f"refine:\n  base_url: {llm.url}\ncloud:\n  plan: local\n", encoding="utf-8")
 
     assert cli.main(["-c", str(cfg_file), "history", "redo", "1", "-m", "英文"]) == 0
     assert copied == ["Our meeting is today."]

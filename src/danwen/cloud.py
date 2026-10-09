@@ -125,6 +125,22 @@ def make_refiner(cfg: Config, cloud_cfg: CloudConfig | None = None) -> Refiner:
     return Refiner(refine_cfg, api_key=lambda: api_key(endpoint.provider), extra=endpoint.llm_extra)
 
 
+def choose_refiner(cfg: Config) -> tuple[Refiner, str]:
+    """依目前方案選擇整理用的 LLM，回傳（Refiner, 說明）。
+    方案要雲端但不能用時：refine.local_fallback 為 true 改用本機，否則丟出 CloudError（不喚醒 Ollama）。"""
+    from .refine import Refiner
+
+    active = resolve_plan(cfg.cloud)
+    if active.refine:
+        try:
+            check_ready(active.cloud)
+            return make_refiner(cfg, active.cloud), f"雲端 {label(active.cloud)}"
+        except (CloudError, ConfigError) as e:
+            if not cfg.refine.local_fallback:
+                raise CloudError(f"方案 {active.title}：{e}") from e
+    return Refiner(cfg.refine), "本機"
+
+
 def label(cfg: CloudConfig) -> str:
     preset = PRESETS.get(cfg.provider)
     return preset.label if preset else cfg.provider

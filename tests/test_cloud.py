@@ -181,10 +181,10 @@ def make_daemon(tmp_path, cloud_cfg):
     return d, notices
 
 
-def job(refine=False, refine_cloud=False):
+def job(refine=False, target="local"):
     from danwen.daemon import Job
 
-    return Job(AUDIO, time.monotonic(), refine, "refine" if refine else "fast", refine_cloud)
+    return Job(AUDIO, time.monotonic(), refine, "refine" if refine else "fast", target)
 
 
 def test_plan_routing_and_fallback(tmp_path, fake_http):
@@ -205,31 +205,59 @@ def test_plan_routing_and_fallback(tmp_path, fake_http):
     assert "雲端辨識失敗" in notices[-1]
 
 
-def test_plan_b_refines_in_cloud_and_falls_back_to_local(tmp_path, fake_http, fake_llm):
+def test_plan_b_refines_in_cloud_and_failure_handling(tmp_path, fake_http, fake_llm):
     # 整理結果要大致出自原文（「本機的結果。」），否則會被防呆判定為被帶走
     server = fake_http({GROQ_CHAT: (200, {"choices": [{"message": {"content": "本機的結果，雲端整理。"}}]})})
     local = fake_llm("本機的結果，本機整理。")
     d, notices = make_daemon(tmp_path, groq(server.url))
     d.refiner = refine.Refiner(config.RefineConfig(base_url=local.url))
-    assert d._cloud_refine_ready() is True
-    d._process(job(refine=True, refine_cloud=True))
+    assert d._choose_refine_target() == "cloud"
+    d._process(job(refine=True, target="cloud"))
     assert d.paster.pasted[-1] == "本機的結果，雲端整理。"
 
     server.routes[GROQ_CHAT] = (500, {"error": "x"})
-    d._process(job(refine=True, refine_cloud=True))
-    assert d.paster.pasted[-1] == "本機的結果，本機整理。"  # 雲端整理失敗改用本機
+    d._process(job(refine=True, target="cloud"))
+    assert d.paster.pasted[-1] == "本機的結果。"  # 預設不改用本機：貼原文
     assert "雲端整理失敗" in notices[-1]
+    assert local.requests == []  # 沒有喚醒本機 Ollama
+
+    d.cfg.refine.local_fallback = True
+    d._process(job(refine=True, target="cloud"))
+    assert d.paster.pasted[-1] == "本機的結果，本機整理。"  # 開啟後改用本機
 
 
-def test_plan_b_without_key_uses_local_and_warns_once(tmp_path, monkeypatch):
+def test_plan_b_without_key(tmp_path, monkeypatch, fake_llm):
     def no_key(provider):
         raise cloud.CloudError("還沒設定 Groq 的 API Key")
 
     monkeypatch.setattr(cloud, "api_key", no_key)
+    local = fake_llm("本機的結果，本機整理。")
     d, notices = make_daemon(tmp_path, CloudConfig())
-    assert d._cloud_refine_ready() is False
-    assert d._cloud_refine_ready() is False
-    assert len(notices) == 1 and "整理暫時改用本機" in notices[0]  # 同一個原因只通知一次
+    d.refiner = refine.Refiner(config.RefineConfig(base_url=local.url))
+    assert d._choose_refine_target() == "none"  # 預設：不喚醒本機，貼原文
+    assert d._choose_refine_target() == "none"
+    assert len(notices) == 1 and "貼上原文" in notices[0]  # 同一個原因只通知一次
+    d._process(job(refine=True, target="none"))
+    assert d.paster.pasted[-1] == "本機的結果。" and local.requests == []
+
+    d.cfg.refine.local_fallback = True
+    d._plan_warning = ""
+    assert d._choose_refine_target() == "local"
+    assert "改用本機" in notices[-1]
+
+
+def test_redo_and_cli_follow_plan(tmp_path, fake_http, fake_llm):
+    server = fake_http({GROQ_CHAT: (200, {"choices": [{"message": {"content": "今天開會。"}}]})})
+    local = fake_llm("今天開會。")
+    cfg = config.Config()
+    cfg.cloud = groq(server.url)
+    cfg.refine.base_url = local.url
+    refiner, where = cloud.choose_refiner(cfg)  # 預設方案 B：雲端
+    assert where == "雲端 Groq"
+    refiner.refine("嗯，今天開會。", "日常")
+    assert len(server.requests) == 1 and local.requests == []
+    cloud.set_plan("local")
+    assert cloud.choose_refiner(cfg)[1] == "本機"
 
 
 def test_set_plan_checks_requirements(tmp_path, monkeypatch):

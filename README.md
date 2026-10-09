@@ -104,10 +104,13 @@ refine:
 | D `cloudflare` 全部用 Cloudflare | ☁ @cf/openai/whisper-large-v3-turbo | ☁ @cf/qwen/qwen3-30b-a3b-fp8（待實測） | 每天約 214 分鐘免費 |
 | E `custom` 自訂 | 依設定檔 `cloud` 區段 | 依設定檔 | |
 
-- **B 為預設**：快速模式的錄音不離開電腦，只有整理模式的文字會送到 Groq。還沒設定 Groq 金鑰時，整理自動改用本機（只通知一次）
+- **B 為預設**：快速模式的錄音不離開電腦，只有整理模式的文字會送到 Groq
+- **雲端不能用時**（還沒設定金鑰、斷網、超過用量）：預設**貼上原文，不喚醒本機 Ollama**（省下約 3 GB 記憶體與載入等待），
+  同一個原因只通知一次；設定 `refine.local_fallback: true` 則改用本機整理。方案 A 一律用本機
+- 歷史紀錄的「換小紙條重新整理」與 `danwen refine` 也依目前方案（`danwen refine --local／--cloud` 可強制）
 - 實測（Groq）：整理一句約 0.7 秒（本機約 2～4 秒），11 句測試集除了 OpenCC 用語轉換與速率限制外全部正確；
   雲端辨識預設**自動判斷語言**（固定中文時整句英文會被硬翻成中文）
-- Groq 免費額度的 LLM 上限約每分鐘 8,000 token，大約每分鐘 8 次整理；超過時那一次改用本機
+- Groq 免費額度的 LLM 上限約每分鐘 8,000 token，大約每分鐘 8 次整理；超過時那一次貼原文（或依 `local_fallback` 改用本機）
 - 只有這次錄音真的會送資料出去時，錄音提示才顯示「☁」
 
 ```bash
@@ -120,7 +123,7 @@ danwen key status / danwen key delete groq
 
 - **金鑰**存在 GNOME 鑰匙圈（以登入密碼加密），不寫進設定檔或 log；服務回傳的錯誤內容（可能含帳號代碼）也不會寫進通知與 log。
   建議建立**權限最小**的金鑰（Cloudflare 只給 Workers AI 權限），並在服務商後台設定**用量上限**
-- **失敗時**（斷網、額度用完、金鑰錯誤）改用本機並通知，照樣貼上
+- **語音辨識失敗時**改用本機並通知，照樣貼上（本機辨識模型一直載入，不受 `local_fallback` 影響）
 - **上下文**（剪貼簿、選取文字）仍需另外開啟 `refine.context_to_cloud` 才會送到雲端
 - 方案的預設值是 `config.yaml` 的 `cloud.plan`；執行中切換的狀態存在 `~/.local/state/danwen/cloud`
 

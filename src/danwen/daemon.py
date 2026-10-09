@@ -38,7 +38,7 @@ class Job:
     released: float
     refine: bool
     kind: str = "fast"
-    refine_cloud: bool = False  # 錄音開始時就決定整理要不要走雲端
+    refine_target: str = "local"  # 錄音開始時就決定：cloud／local／none（雲端不能用且不改用本機：貼原文）
 
 
 class Daemon:
@@ -62,7 +62,7 @@ class Daemon:
         # 雲端依方案決定；本機的 backend 與 Refiner 一直保留，雲端不能用或失敗時改用本機
         cloud.resolve_plan(cfg.cloud)  # 設定檔的方案名稱有誤時，啟動就報錯
         self._plan_warning = ""
-        self._refine_cloud = False
+        self._refine_target = "local"
         self.history = (
             History(size=cfg.history.size, keep_audio=cfg.history.keep_audio) if cfg.history.size > 0 else None
         )
@@ -161,14 +161,14 @@ class Daemon:
             # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
             if long and not (self.dbus and self.dbus.overlay_present()):
                 self.feedback.info(f"長錄音中：再按一下 {display_name(self.cfg.hotkey.key)} 結束，Esc 取消")
-            self._refine_cloud = self._refining and self._cloud_refine_ready()
-            if self._refining and not self._refine_cloud:
+            self._refine_target = self._choose_refine_target() if self._refining else "local"
+            if self._refining and self._refine_target == "local":
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
             audio = self.recorder.stop()
             self.feedback.stop()
             self._set_state("processing")
-            self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_cloud))
+            self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_target))
         elif action is Action.CANCEL:
             self.recorder.stop()
             self._set_state("idle")
@@ -234,20 +234,23 @@ class Daemon:
         self._plan_warning = ""
         log.info("方案：%s", active.title)
 
-    def _cloud_refine_ready(self) -> bool:
-        """這次整理能不能走雲端。方案要雲端卻缺金鑰時改用本機，同一個原因只通知一次。"""
+    def _choose_refine_target(self) -> str:
+        """這次整理走哪裡：cloud、local，或 none（方案要雲端但不能用，且 refine.local_fallback 關閉：貼原文、
+        不喚醒本機 Ollama）。同一個原因只通知一次。"""
         active = self.plan()
         if not active.refine:
-            return False
+            return "local"
         try:
             cloud.check_ready(active.cloud)
         except (cloud.CloudError, ConfigError) as e:
+            fallback = self.cfg.refine.local_fallback
             if self._plan_warning != str(e):
                 self._plan_warning = str(e)
-                self.feedback.notice(f"方案 {active.title}：{e}。整理暫時改用本機")
-            return False
+                after = "整理暫時改用本機" if fallback else "整理會先貼上原文（或切到方案 A 改用本機整理）"
+                self.feedback.notice(f"方案 {active.title}：{e}。{after}")
+            return "local" if fallback else "none"
         self._plan_warning = ""
-        return True
+        return "cloud"
 
     def _transcribe(self, audio: np.ndarray, sr: int) -> tuple[str, str]:
         """方案用雲端辨識時先試雲端，失敗就改用本機（本機模型一直保持載入）。"""
@@ -260,17 +263,20 @@ class Daemon:
                 self.feedback.notice(f"雲端辨識失敗，改用本機（{e}）")
         return self.backend.transcribe(audio, sr), self.backend.name
 
-    def _refine(self, text: str, mode: str, use_cloud: bool) -> tuple[str, str]:
-        """整理文字；雲端失敗改用本機，本機也失敗就丟出錯誤（由呼叫端改貼原文）。回傳（結果, 用了哪裡）。"""
+    def _refine(self, text: str, mode: str, target: str) -> tuple[str, str]:
+        """整理文字，回傳（結果, 用了哪裡）。雲端失敗時依 refine.local_fallback 改用本機，否則丟出錯誤；
+        錯誤由呼叫端處理（改貼原文）。"""
         terms = self.post.replacements.terms()
         context = self._context()
-        if use_cloud:
+        if target == "cloud":
             active = self.plan()
             try:
                 refiner = cloud.make_refiner(self.cfg, active.cloud)
                 # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
                 return self.post(refiner.refine(text, mode, terms, context)), f"雲端 {cloud.label(active.cloud)}"
             except (RefineError, ConfigError) as e:
+                if not self.cfg.refine.local_fallback:
+                    raise RefineError(f"雲端整理失敗：{e}") from e
                 self.feedback.notice(f"雲端整理失敗，改用本機（{e}）")
         return self.post(self.refiner.refine(text, mode, terms, context)), "本機"
 
@@ -296,11 +302,14 @@ class Daemon:
         refined_with: str | None = None
         if refine and text:
             mode = current_mode(self.cfg.refine.mode)
-            try:
-                text, where = self._refine(text, mode, job.refine_cloud)
-                refined_with = mode
-            except (RefineError, ConfigError) as e:
-                self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
+            if job.refine_target == "none":
+                where = "未整理：雲端不能用"  # 錄音開始時已通知過原因
+            else:
+                try:
+                    text, where = self._refine(text, mode, job.refine_target)
+                    refined_with = mode
+                except (RefineError, ConfigError) as e:
+                    self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
         t3 = time.monotonic()
         if text:
             self.paster.paste(text)
@@ -363,10 +372,11 @@ class Daemon:
     def redo(self, entry_id: int, mode: str) -> str:
         if self.refiner is None:
             raise RuntimeError("整理模式未啟用（hotkey.double_tap_ms 為 0）")
+        refiner, _ = cloud.choose_refiner(self.cfg)  # 依方案；雲端不能用時的處理同聽寫
         terms = self.post.replacements.terms()
         result, _ = redo_entry(
             self._require_history(), entry_id, mode or self.current_mode(),
-            lambda raw, m: self.post(self.refiner.refine(raw, m, terms)),
+            lambda raw, m: self.post(refiner.refine(raw, m, terms)),
         )
         Clipboard.set_text(result)
         if self.dbus:

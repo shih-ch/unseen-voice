@@ -1,8 +1,38 @@
 import json
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_environment(tmp_path, monkeypatch):
+    """測試絕不碰使用者的真實環境：
+    - 不讀真正的 GNOME 鑰匙圈（需要金鑰的測試自己換成假金鑰）
+    - 方案、小紙條、歷史紀錄的狀態都放在暫存資料夾
+    - 只能連到本機的假服務；任何對外連線直接失敗（曾因此用真金鑰呼叫到 Groq）"""
+    from danwen import cloud, httpclient, paths, refine
+    from danwen.asr import cloud as asr_cloud
+
+    def no_keyring(provider):
+        raise cloud.CloudError("測試中不讀真正的鑰匙圈")
+
+    monkeypatch.setattr(cloud, "api_key", no_keyring)
+    monkeypatch.setattr(cloud, "STATE_FILE", tmp_path / "isolated" / "cloud")
+    monkeypatch.setattr(refine, "MODE_FILE", tmp_path / "isolated" / "mode")
+    monkeypatch.setattr(paths, "HISTORY_DIR", tmp_path / "isolated" / "history")
+
+    real_post = httpclient.post
+
+    def local_only_post(url, *args, **kwargs):
+        host = urllib.parse.urlparse(url).hostname
+        if host not in ("127.0.0.1", "localhost"):
+            raise AssertionError(f"測試不可連到外部網路：{url}")
+        return real_post(url, *args, **kwargs)
+
+    for module in (httpclient, refine, asr_cloud):
+        monkeypatch.setattr(module, "post", local_only_post)
 
 
 class FakeLLM:

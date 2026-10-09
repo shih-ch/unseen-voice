@@ -150,13 +150,20 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
 
     from .refine import RefineError, Refiner, current_mode
 
-    post = _postprocessor(cfg)
-    if args.cloud:
-        from . import cloud
+    from . import cloud
 
-        refiner = cloud.make_refiner(cfg)
-    else:
-        refiner = Refiner(cfg.refine)
+    post = _postprocessor(cfg)
+    try:
+        if args.local:
+            refiner, where = Refiner(cfg.refine), "本機"
+        elif args.cloud:
+            active = cloud.resolve_plan(cfg.cloud)
+            refiner, where = cloud.make_refiner(cfg, active.cloud), f"雲端 {cloud.label(active.cloud)}"
+        else:
+            refiner, where = cloud.choose_refiner(cfg)
+    except (cloud.CloudError, config.ConfigError) as e:
+        print(f"無法整理：{e}", file=sys.stderr)
+        return 1
     mode = args.mode or current_mode(cfg.refine.mode)
     text = post(args.text)
     t = time.monotonic()
@@ -166,7 +173,7 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     except RefineError as e:
         print(f"整理失敗（實際使用時會改貼原文）：{e}", file=sys.stderr)
         return 1
-    print(f"[{mode}，{time.monotonic() - t:.2f} 秒]\n{result}")
+    print(f"[{mode}，{where}，{time.monotonic() - t:.2f} 秒]\n{result}")
     return 0
 
 
@@ -261,8 +268,14 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
         elif args.action == "redo":
             from .history import redo_entry
 
+            from . import cloud
+
             post = _postprocessor(cfg)
-            refiner = Refiner(cfg.refine)
+            try:
+                refiner, _ = cloud.choose_refiner(cfg)  # 依方案
+            except cloud.CloudError as e:
+                print(f"無法整理：{e}", file=sys.stderr)
+                return 1
             mode = args.mode or current_mode(cfg.refine.mode)
             result, new = redo_entry(
                 history, entry.id, mode, lambda raw, m: post(refiner.refine(raw, m, post.replacements.terms()))
@@ -427,7 +440,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("text", help="要整理的文字")
     p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
     p.add_argument("--context", help="模擬剪貼簿內容，測試上下文的效果")
-    p.add_argument("--cloud", action="store_true", help="改用雲端 LLM（設定檔的 cloud 區段）")
+    p.add_argument("--cloud", action="store_true", help="強制用目前方案的雲端 LLM（預設依方案）")
+    p.add_argument("--local", action="store_true", help="強制用本機 Ollama（預設依方案）")
     p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
     p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")

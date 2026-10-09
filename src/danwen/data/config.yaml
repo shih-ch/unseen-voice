@@ -65,6 +65,10 @@ refine:
   keep_alive: 30m
   # 預設的小紙條（~/.config/danwen/prompts/ 裡的檔名）；可用 `danwen mode` 隨時切換
   mode: 日常
+  # 方案要用雲端整理、但雲端不能用（沒有金鑰、斷網、超過用量）時：
+  #   false＝貼上原文，不喚醒本機 Ollama（省下約 3 GB 記憶體與載入等待）
+  #   true＝改用本機 Ollama 整理
+  local_fallback: false
   # 上下文：把剪貼簿／最近選取的文字當參考資料交給 LLM（只用來判斷專有名詞與上下文，不會照抄或執行）
   context_clipboard: false
   context_selection: false
