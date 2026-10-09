@@ -43,3 +43,23 @@ def test_broken_replacements_file_is_ignored(tmp_path):
     f = tmp_path / "r.yaml"
     f.write_text("- 不是對應表\n", encoding="utf-8")
     assert Replacements(f).apply("原文") == "原文"
+
+
+def test_terms_skip_single_char_fixes_and_duplicates(tmp_path):
+    f = tmp_path / "r.yaml"
+    f.write_text("臺: 台\nZeroType: ZeroType\n肉type: ZeroType\n酷伯內提斯: Kubernetes\n", encoding="utf-8")
+    assert Replacements(f).terms() == ["ZeroType", "Kubernetes"]
+
+
+def test_edit_replacements_keeps_comments(tmp_path):
+    from danwen.postprocess import edit_replacements
+
+    f = tmp_path / "r.yaml"
+    f.write_text("# 我的註解\n臺: 台\n", encoding="utf-8")
+    assert edit_replacements(f, "肉type", "ZeroType") is False
+    assert edit_replacements(f, "肉type", "Zerotype") is True  # 更新
+    assert edit_replacements(f, "臺", None) is True  # 刪除
+    assert edit_replacements(f, "不存在", None) is False
+    text = f.read_text(encoding="utf-8")
+    assert text.startswith("# 我的註解\n")
+    assert Replacements(f).entries() == {"肉type": "Zerotype"}

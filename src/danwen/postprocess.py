@@ -55,11 +55,47 @@ class Replacements:
         self._pattern = re.compile("|".join(map(re.escape, keys))) if keys else None
         log.info("載入替換字典 %s（%d 條）", self.path, len(table))
 
+    def entries(self) -> dict[str, str]:
+        self._reload_if_changed()
+        return dict(self._table)
+
+    def terms(self) -> list[str]:
+        """字典裡的正確寫法（專有名詞），給整理模式的 LLM 參考。單字的修正（如 臺→台）不列入。"""
+        return list(dict.fromkeys(v for v in self.entries().values() if len(v) >= 2))
+
     def apply(self, text: str) -> str:
         self._reload_if_changed()
         if self._pattern is None:
             return text
         return self._pattern.sub(lambda m: self._table[m.group(0)], text)
+
+
+def _entry_key(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    try:
+        data = yaml.safe_load(stripped)
+    except yaml.YAMLError:
+        return None
+    if isinstance(data, dict) and len(data) == 1:
+        return str(next(iter(data)))
+    return None
+
+
+def edit_replacements(path: Path, key: str, value: str | None) -> bool:
+    """新增／修改（value 不為 None）或刪除一條詞條。逐行修改，保留使用者的註解。
+    回傳原本是否已有這個詞條。"""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
+    kept = [line for line in lines if _entry_key(line) != key]
+    existed = len(kept) != len(lines)
+    if value is not None:
+        if kept and not kept[-1].endswith("\n"):
+            kept[-1] += "\n"
+        kept.append(yaml.safe_dump({key: value}, allow_unicode=True, default_flow_style=False))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(kept), encoding="utf-8")
+    return existed
 
 
 def default_replacements_path() -> Path:

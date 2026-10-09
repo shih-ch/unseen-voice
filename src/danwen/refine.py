@@ -45,9 +45,15 @@ class Prompt:
     examples: list[tuple[str, str]]
     check_language: bool = True
 
-    def messages(self, text: str) -> list[dict[str, str]]:
+    def messages(self, text: str, terms: list[str] | None = None) -> list[dict[str, str]]:
+        system = self.system
+        if terms:
+            system += (
+                "\n\n專有名詞與慣用寫法（逐字稿裡發音相近的詞請改成這些寫法，其他內容不要因此更動）："
+                + "、".join(terms)
+            )
         # 逐字稿包在標籤裡，讓模型分清楚「要整理的文字」和「給它的指示」
-        msgs = [{"role": "system", "content": self.system}]
+        msgs = [{"role": "system", "content": system}]
         for given, wanted in self.examples:
             msgs.append({"role": "user", "content": f"<逐字稿>{given}</逐字稿>"})
             msgs.append({"role": "assistant", "content": wanted})
@@ -147,9 +153,9 @@ class Refiner:
 
         threading.Thread(target=run, name="refine-preload", daemon=True).start()
 
-    def refine(self, text: str, mode: str | None = None) -> str:
+    def refine(self, text: str, mode: str | None = None, terms: list[str] | None = None) -> str:
         prompt = load_prompt(mode or current_mode(self.cfg.mode))
-        messages = prompt.messages(text)
+        messages = prompt.messages(text, terms)
         if self.cfg.provider == "ollama":
             result = self._post(
                 f"{self.base_url}/api/chat",

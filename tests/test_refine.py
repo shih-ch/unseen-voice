@@ -142,3 +142,17 @@ def test_unreachable_service(user_dirs):
 def test_invalid_provider():
     with pytest.raises(ConfigError):
         Refiner(RefineConfig(provider="claude"))
+
+
+def test_terms_are_added_to_system_prompt():
+    p = refine.load_prompt("日常")
+    system = p.messages("文字", ["ZeroType", "Kubernetes"])[0]["content"]
+    assert system.startswith(p.system)
+    assert "ZeroType、Kubernetes" in system
+    assert p.messages("文字")[0]["content"] == p.system
+
+
+def test_all_bundled_prompts_are_valid():
+    for name in ("日常", "會議記錄", "英文", "Slack", "Email"):
+        p = refine.load_prompt(name)
+        assert p.system and p.examples and p.description

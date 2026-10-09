@@ -1,4 +1,4 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | dict | init-config"""
 
 from __future__ import annotations
 
@@ -150,11 +150,45 @@ def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
     text = post(args.text)
     t = time.monotonic()
     try:
-        result = post(refiner.refine(text, mode))
+        result = post(refiner.refine(text, mode, post.replacements.terms()))
     except RefineError as e:
         print(f"整理失敗（實際使用時會改貼原文）：{e}", file=sys.stderr)
         return 1
     print(f"[{mode}，{time.monotonic() - t:.2f} 秒]\n{result}")
+    return 0
+
+
+def cmd_dict(args: argparse.Namespace, cfg: config.Config) -> int:
+    from .postprocess import Replacements, edit_replacements
+
+    path = Path(cfg.postprocess.replacements).expanduser() if cfg.postprocess.replacements else paths.REPLACEMENTS_FILE
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(paths.DATA_DIR / "replacements.yaml", path)
+    words = args.words
+    if args.action == "add":
+        if len(words) not in (1, 2):
+            print("用法：danwen dict add 正確寫法　或　danwen dict add 常錯的寫法 正確寫法", file=sys.stderr)
+            return 2
+        wrong, right = (words[0], words[0]) if len(words) == 1 else words
+        existed = edit_replacements(path, wrong, right)
+        print(f"{'已更新' if existed else '已新增'}：{wrong} → {right}" if wrong != right else f"已新增專有名詞：{right}")
+        return 0
+    if args.action == "remove":
+        if len(words) != 1:
+            print("用法：danwen dict remove 詞條", file=sys.stderr)
+            return 2
+        if not edit_replacements(path, words[0], None):
+            print(f"字典裡沒有「{words[0]}」", file=sys.stderr)
+            return 1
+        print(f"已刪除：{words[0]}")
+        return 0
+    table = Replacements(path)
+    terms = set(table.terms())
+    print(f"替換字典 {path}（＊＝整理模式也會參考的專有名詞）：")
+    for wrong, right in table.entries().items():
+        mark = "＊" if right in terms else "  "
+        print(f"  {mark}{right}" if wrong == right else f"  {mark}{wrong} → {right}")
     return 0
 
 
@@ -194,6 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("refine", help="用整理模式整理一段文字（測試小紙條用）")
     p.add_argument("text", help="要整理的文字")
     p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
+    p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
+    p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
+    p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)
@@ -212,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         "paste-test": cmd_paste_test,
         "mode": cmd_mode,
         "refine": cmd_refine,
+        "dict": cmd_dict,
         "init-config": cmd_init_config,
     }[command]
     try:

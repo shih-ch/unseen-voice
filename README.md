@@ -47,8 +47,9 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 - 預設用本機 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M`，完全離線；需先 `ollama pull` 這個模型
 - 開始錄音時就先載入模型；載入後每句約 2～3 秒，用過後模型留在記憶體 30 分鐘（約 3 GB）
 - LLM 沒回應、輸出空白、比原文長太多（像在回答問題）或語言變了，會通知並**改貼原文**
-- 內建三張小紙條：`日常`（預設）、`會議記錄`、`英文`（翻譯）。小紙條放在 `~/.config/danwen/prompts/*.yaml`，
-  可自行修改或新增，檔名就是模式名稱
+- 內建五張小紙條：`日常`（預設）、`會議記錄`、`Slack`、`Email`、`英文`（翻譯）。小紙條放在
+  `~/.config/danwen/prompts/*.yaml`，可自行修改或新增，檔名就是模式名稱
+- 替換字典裡的正確寫法（兩個字以上）會一併交給 LLM 參考，讓發音相近的專有名詞也能寫對
 
 ```bash
 danwen mode                 # 列出小紙條與目前模式
@@ -80,7 +81,14 @@ refine:
 systemctl --user restart danwen
 ```
 
-`~/.config/danwen/replacements.yaml` 是替換字典（常錯詞、專有名詞），存檔即生效。
+`~/.config/danwen/replacements.yaml` 是替換字典（常錯詞、專有名詞），存檔即生效。也可以用指令：
+
+```bash
+danwen dict                          # 列出
+danwen dict add 肉type ZeroType       # 常錯的寫法 → 正確寫法
+danwen dict add Kubernetes           # 只加專有名詞（整理模式的 LLM 會參考）
+danwen dict remove 肉type
+```
 
 ## 指令
 
@@ -88,6 +96,7 @@ systemctl --user restart danwen
 danwen devices            # 列出麥克風與鍵盤
 danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
+danwen dict               # 替換字典：列出、新增、刪除
 danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A
 danwen download -b B      # 預先下載模型

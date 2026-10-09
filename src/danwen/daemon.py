@@ -115,7 +115,8 @@ class Daemon:
             mode = current_mode(self.cfg.refine.mode)
             try:
                 # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
-                text = self.post(self.refiner.refine(text, mode))
+                terms = self.post.replacements.terms()
+                text = self.post(self.refiner.refine(text, mode, terms))
             except (RefineError, ConfigError) as e:
                 self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
         t3 = time.monotonic()
