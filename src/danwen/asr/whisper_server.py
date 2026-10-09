@@ -64,6 +64,8 @@ class WhisperServerBackend(ASRBackend):
             if time.monotonic() > deadline:
                 raise ASRUnavailable(f"{UNIT} 啟動逾時，請看 journalctl --user -u {UNIT}")
             time.sleep(0.5)
+        # 暖機：剛啟動的 server 第一次推論要準備 GPU（Vulkan），約多花 6 秒，先在這裡跑掉
+        self.transcribe(np.zeros(16000, dtype=np.float32), 16000)
 
     def transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
         wav = to_wav_bytes(resample(audio, sample_rate, 16000), 16000)
