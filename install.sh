@@ -173,7 +173,13 @@ fi
 
 say "完成"
 if [ "$NEED_RELOGIN" = 1 ]; then
-    printf '\033[1;33m    請登出再登入（或重新開機），讓 input 群組生效，之後就會自動啟動。\033[0m\n'
+    if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ]; then
+        # linger 開啟時 systemd --user 登出後仍在執行，不會取得新群組
+        printf '\033[1;33m    請重新開機，讓 input 群組生效（你的帳號開了 linger，只登出再登入不夠）。\033[0m\n'
+    else
+        printf '\033[1;33m    請登出再登入（或重新開機），讓 input 群組生效，之後就會自動啟動。\033[0m\n'
+    fi
+    printf '    不想等的話，可先在終端機前景試用：sg input -c "%s -v run"\n' "$DANWEN_BIN"
 fi
 cat <<EOF
     使用：按住右 Ctrl 超過 0.3 秒開始錄音，放開後自動貼上

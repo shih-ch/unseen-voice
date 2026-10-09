@@ -150,5 +150,9 @@ fi
 
 say "完成"
 if [ "$NEED_RELOGIN" = 1 ]; then
-    info "請登出再登入，讓 input 群組的變更生效。"
+    if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ]; then
+        info "請重新開機，讓 input 群組的變更生效（你的帳號開了 linger，只登出再登入不夠）。"
+    else
+        info "請登出再登入，讓 input 群組的變更生效。"
+    fi
 fi

@@ -20,7 +20,8 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 
 **不會**修改 fcitx5、IBus、im-config 設定或輸入法環境變數。安裝前後會比對這些檔案並印出結果。
 
-第一次安裝後請**登出再登入**，讓 input 群組生效。
+第一次安裝後請**登出再登入**，讓 input 群組生效。若帳號開了 linger（`loginctl show-user $USER -p Linger`），systemd --user 登出後不會重啟，需要**重新開機**。
+等不及的話可先前景試用：`sg input -c "danwen -v run"`。
 
 > 安全提醒：在 `input` 群組裡的程式都能讀取所有鍵盤輸入。這是「按住才錄音」熱鍵的必要條件，
 > 移除時 uninstall.sh 會把你移出群組（若是 install.sh 加入的）。
