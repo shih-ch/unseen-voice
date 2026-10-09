@@ -36,6 +36,9 @@ const IFACE_XML = `
     <method name="SetPlan"><arg type="s" name="name" direction="in"/></method>
     <method name="ListModes"><arg type="a(ss)" direction="out"/></method>
     <method name="SetMode"><arg type="s" name="name" direction="in"/></method>
+    <method name="CycleMode">
+      <arg type="i" name="step" direction="in"/><arg type="s" direction="out"/>
+    </method>
     <method name="GetHistory">
       <arg type="i" name="limit" direction="in"/><arg type="s" direction="out"/>
     </method>
@@ -216,6 +219,8 @@ class DanwenIndicator extends PanelMenu.Button {
         this._historySignalId = 0;
         this._generation = 0;
         this._modeItems = new Map();
+        this._scrollDelta = 0;
+        this._lastCycle = 0;
         this._cancellable = new Gio.Cancellable();
         this._osd = new DanwenOsd();
         this._overlayNameId = Gio.bus_own_name(Gio.BusType.SESSION, OVERLAY_BUS_NAME,
@@ -227,6 +232,8 @@ class DanwenIndicator extends PanelMenu.Button {
             if (open)
                 this._refreshLists();
         });
+        // 滑鼠停在圖示上滾動滾輪：切換小紙條
+        this.connect('scroll-event', (_actor, event) => this._onScroll(event));
 
         new DanwenProxy(Gio.DBus.session, BUS_NAME, OBJECT_PATH, (proxy, error) => {
             if (error) {
@@ -410,6 +417,46 @@ class DanwenIndicator extends PanelMenu.Button {
         } catch (e) {
             Main.notifyError(APP_NAME, errorMessage(e));
             return null;
+        }
+    }
+
+    _onScroll(event) {
+        if (!this._running)
+            return Clutter.EVENT_PROPAGATE;
+        let step = 0;
+        switch (event.get_scroll_direction()) {
+        case Clutter.ScrollDirection.UP:
+            step = -1;
+            break;
+        case Clutter.ScrollDirection.DOWN:
+            step = 1;
+            break;
+        case Clutter.ScrollDirection.SMOOTH: {
+            // 觸控板的連續滾動：累積到一格才換
+            const [, dy] = event.get_scroll_delta();
+            this._scrollDelta += dy;
+            if (Math.abs(this._scrollDelta) >= 1) {
+                step = Math.sign(this._scrollDelta);
+                this._scrollDelta = 0;
+            }
+            break;
+        }
+        }
+        if (step)
+            this._cycleMode(step);
+        return Clutter.EVENT_STOP;
+    }
+
+    async _cycleMode(step) {
+        // 滾輪一次常會送出好幾格，間隔太短的忽略，免得一次跳過好幾張
+        const now = GLib.get_monotonic_time();
+        if (now - this._lastCycle < 250_000)
+            return;
+        this._lastCycle = now;
+        const result = await this._call('CycleModeAsync', step);
+        if (result !== null) {
+            Main.osdWindowManager.show(-1, Gio.ThemedIcon.new('document-edit-symbolic'),
+                `小紙條：${result[0]}`, null, null);
         }
     }
 

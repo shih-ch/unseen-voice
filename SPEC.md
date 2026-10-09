@@ -154,5 +154,11 @@
 - 待實測：Cloudflare（需 account_id 與金鑰）、OpenAI
 - 另：長錄音短於 1.5 秒視為誤觸，丟棄不貼（`long_recording.min_duration_s`）
 
+## 快速切換小紙條
+- extension：滑鼠停在圖示上滾動滾輪切換（間隔 0.25 秒內的多格忽略；觸控板累積一格才換），
+  以 GNOME 內建的浮動提示（Main.osdWindowManager）顯示目前小紙條
+- `danwen mode next／prev`，可綁 GNOME 自訂快捷鍵；D-Bus `CycleMode(step)`
+- 不做：按住錄音鍵＋數字（danwen 攔不住按鍵，數字會同時送進程式）、由 install.sh 自動建立 GNOME 快捷鍵（可能與使用者既有快捷鍵衝突）
+
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示

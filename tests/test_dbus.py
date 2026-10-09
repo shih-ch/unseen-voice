@@ -41,6 +41,10 @@ class StubDaemon:
     def list_modes(self):
         return [("日常", "預設"), ("英文", "翻譯")]
 
+    def cycle_mode(self, step):
+        self.mode = "英文" if self.mode == "日常" else "日常"
+        return self.mode
+
     def set_mode(self, name):
         if name not in ("日常", "英文"):
             raise ConfigError(f"找不到小紙條「{name}」")
@@ -100,6 +104,9 @@ def test_properties_and_methods(service):
         assert [list(m) for m in await iface.call_list_modes()] == [["日常", "預設"], ["英文", "翻譯"]]
         await iface.call_set_mode("英文")
         assert await iface.get_mode() == "英文"
+        assert await iface.call_cycle_mode(1) == "日常"
+        assert await iface.get_mode() == "日常"
+        await iface.call_set_mode("英文")
         assert json.loads(await iface.call_get_history(1)) == [{"id": 2, "text": "第二句"}]
         assert await iface.call_copy_history(0) == "第二句"
         assert await iface.call_redo(2, "Email") == "Email:2"

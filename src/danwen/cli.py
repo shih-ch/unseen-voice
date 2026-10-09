@@ -118,8 +118,13 @@ def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
     from . import refine
 
     if args.name:
-        refine.set_mode(args.name)
-        print(f"整理模式改用小紙條：{args.name}")
+        if args.name in ("next", "prev"):
+            name = refine.cycle_mode(1 if args.name == "next" else -1, cfg.refine.mode)
+        else:
+            refine.set_mode(args.name)
+            name = args.name
+        args.name = name
+        print(f"整理模式改用小紙條：{name}")
         if not sys.stdout.isatty():
             # 從 GNOME 自訂快捷鍵執行時看不到終端機，改用桌面通知告知
             from .feedback import Feedback
@@ -435,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("text", nargs="?", default="但聞人語測試：把這個PR merge到main，台灣繁體中文。")
     p.add_argument("--delay", type=int, default=3, help="倒數秒數（預設 3）")
     p = sub.add_parser("mode", help="列出或切換整理模式的小紙條")
-    p.add_argument("name", nargs="?", help="要切換到的小紙條名稱")
+    p.add_argument("name", nargs="?", help="要切換到的小紙條名稱；next／prev＝下一張／上一張")
     p = sub.add_parser("refine", help="用整理模式整理一段文字（測試小紙條用）")
     p.add_argument("text", help="要整理的文字")
     p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")

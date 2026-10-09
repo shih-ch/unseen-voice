@@ -27,7 +27,7 @@ from .history import History, redo_entry
 from .hotkey import Action, HoldDetector, KeyboardListener, display_name, key_code
 from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
-from .refine import RefineError, Refiner, available_prompts, current_mode, load_prompt, set_mode
+from .refine import RefineError, Refiner, available_prompts, current_mode, cycle_mode, load_prompt, set_mode
 
 log = logging.getLogger(__name__)
 
@@ -350,6 +350,9 @@ class Daemon:
 
     def set_mode(self, name: str) -> None:
         set_mode(name)
+
+    def cycle_mode(self, step: int) -> str:
+        return cycle_mode(step, self.cfg.refine.mode)
 
     def _require_history(self) -> History:
         if self.history is None:

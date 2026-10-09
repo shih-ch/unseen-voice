@@ -73,6 +73,12 @@ class FakeDaemon:
     def list_modes(self):
         return [(name, refine.load_prompt(name).description) for name in refine.available_prompts()]
 
+    def cycle_mode(self, step):
+        names = list(refine.available_prompts())
+        index = names.index(self.mode) if self.mode in names else -1
+        self.set_mode(names[(index + step) % len(names)])
+        return self.mode
+
     def set_mode(self, name):
         if name not in refine.available_prompts():
             raise ConfigError(f"找不到小紙條「{name}」")

@@ -157,3 +157,27 @@ def test_http_errors_do_not_leak_service_details(fake_http, user_dirs):
         with pytest.raises(RefineError, match=message) as info:
             r.refine("今天開會。", "日常")
         assert "org_SECRET123" not in str(info.value)
+
+
+def test_cycle_mode_wraps_around(user_dirs):
+    names = list(refine.available_prompts())
+    assert refine.current_mode("日常") == "日常"
+    first = refine.cycle_mode(1, "日常")
+    assert first == names[(names.index("日常") + 1) % len(names)]
+    assert refine.current_mode("日常") == first
+    assert refine.cycle_mode(-1, "日常") == "日常"
+    for _ in range(len(names)):  # 繞一圈回到原處
+        refine.cycle_mode(1, "日常")
+    assert refine.current_mode("日常") == "日常"
+
+
+def test_cli_mode_next_and_prev(user_dirs, capsys):
+    from danwen import cli
+
+    names = list(refine.available_prompts())
+    assert cli.main(["mode", "next"]) == 0
+    expected = names[(names.index("日常") + 1) % len(names)]
+    assert refine.current_mode("日常") == expected
+    assert f"改用小紙條：{expected}" in capsys.readouterr().out
+    assert cli.main(["mode", "prev"]) == 0
+    assert refine.current_mode("日常") == "日常"

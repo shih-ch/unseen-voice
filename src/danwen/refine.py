@@ -132,6 +132,18 @@ def set_mode(name: str) -> None:
     MODE_FILE.write_text(name + "\n", encoding="utf-8")
 
 
+def cycle_mode(step: int, default: str) -> str:
+    """換到下一張（step=1）或上一張（step=-1）小紙條，順序同 available_prompts；回傳新的模式名稱。"""
+    names = list(available_prompts())
+    if not names:
+        raise ConfigError("沒有任何小紙條")
+    current = current_mode(default)
+    index = names.index(current) if current in names else -1
+    name = names[(index + step) % len(names)]
+    set_mode(name)
+    return name
+
+
 def check_output(source: str, output: str, check_language: bool) -> None:
     if not output:
         raise RefineError("LLM 沒有輸出")

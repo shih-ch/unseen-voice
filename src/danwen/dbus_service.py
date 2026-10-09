@@ -102,6 +102,12 @@ class _Interface(ServiceInterface):
         self.emit_properties_changed({"Mode": name})
 
     @method()
+    def CycleMode(self, step: "i") -> "s":  # 1＝下一張、-1＝上一張；回傳新的小紙條名稱
+        name = self._call(self._daemon.cycle_mode, step)
+        self.emit_properties_changed({"Mode": name})
+        return name
+
+    @method()
     def GetHistory(self, limit: "i") -> "s":
         return self._call(self._daemon.history_json, limit)
 
