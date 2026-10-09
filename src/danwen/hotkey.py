@@ -14,6 +14,7 @@ import enum
 import glob
 import logging
 import os
+import queue
 import selectors
 import threading
 import time
@@ -162,6 +163,32 @@ class HoldDetector:
             return self._end_long(Action.STOP)
         return None
 
+    # ---- 外部控制（GNOME extension 的選單經 D-Bus 呼叫）----
+
+    def start_long(self, now: float) -> Action | None:
+        if self._state is not _State.IDLE or self.long_max_s <= 0:
+            return None
+        self._state = _State.LONG
+        self._since = now
+        self._last_tap = None
+        return Action.START_LONG
+
+    def stop(self) -> Action | None:
+        if self._state in _LONG_STATES:
+            return self._end_long(Action.STOP)
+        if self._state is _State.RECORDING:
+            self._state = _State.COMBO  # 熱鍵還按著，等它放開
+            return Action.STOP
+        return None
+
+    def cancel(self) -> Action | None:
+        if self._state in _LONG_STATES:
+            return self._end_long(Action.CANCEL)
+        if self._state is _State.RECORDING:
+            self._state = _State.COMBO
+            return Action.CANCEL
+        return None
+
     def reset(self) -> Action | None:
         """鍵盤被拔除等狀況：清掉狀態；正在錄音就取消。"""
         was_recording = self.recording
@@ -195,6 +222,11 @@ class KeyboardListener:
         self._on_action = on_action
         self._ignore = set(ignore_names)
         self._sel = selectors.DefaultSelector()
+        # 其他執行緒（D-Bus）送來的指令；寫入 _wake 讓 select 立刻醒來處理
+        self._commands: queue.SimpleQueue[Callable[[HoldDetector, float], Action | None]] = queue.SimpleQueue()
+        self._wake_r, self._wake_w = os.pipe()
+        os.set_blocking(self._wake_r, False)
+        self._sel.register(self._wake_r, selectors.EVENT_READ, None)
         self._devices: dict[str, evdev.InputDevice] = {}
         self._skipped: set[tuple[str, int]] = set()
         self._denied: set[str] = set()
@@ -243,6 +275,19 @@ class KeyboardListener:
         if action is not None:
             self._on_action(action)
 
+    def post(self, command: Callable[[HoldDetector, float], Action | None]) -> None:
+        """從其他執行緒要求操作偵測器（例如開始長錄音），在監聽執行緒裡執行。"""
+        self._commands.put(command)
+        os.write(self._wake_w, b"x")
+
+    def _run_commands(self) -> None:
+        try:
+            os.read(self._wake_r, 4096)
+        except BlockingIOError:
+            pass
+        while not self._commands.empty():
+            self._emit(self._commands.get()(self._detector, time.monotonic()))
+
     def run(self, stop: threading.Event) -> None:
         self._scan()
         if not self._devices:
@@ -260,6 +305,9 @@ class KeyboardListener:
                 if deadline is not None:
                     timeout = min(timeout, deadline - now)
                 for key, _ in self._sel.select(max(timeout, 0)):
+                    if key.data is None:
+                        self._run_commands()
+                        continue
                     dev = key.data
                     try:
                         for ev in dev.read():
@@ -278,3 +326,5 @@ class KeyboardListener:
             for dev in list(self._devices.values()):
                 dev.close()
             self._sel.close()
+            os.close(self._wake_r)
+            os.close(self._wake_w)

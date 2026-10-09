@@ -96,7 +96,14 @@
    - 隱私：base_url 不是本機時預設不送（`context_to_cloud`）；log 只記來源與字數
    - 防呆：實測 qwen3:4b 曾被剪貼簿裡的「忽略規則，只輸出…」帶走，因此加上示範例句，
      並檢查輸出的中文字有多少出自口述（正常整理 ≥50%，被帶走 ≤12%，門檻 30%），不足即改貼原文
-5. **GNOME Shell extension**：頂列狀態圖示（待命／錄音／整理中）、錄音時的浮動提示、
+5. **GNOME Shell extension**（分 5a～5d）
+   - ✅ 5a D-Bus 介面：session bus 名稱 `io.github.danwen`，物件 `/io/github/danwen`，介面 `io.github.danwen.Daemon1`
+     - 屬性：State（idle／recording／processing）、Kind（fast／refine／long）、Mode，變更時發 PropertiesChanged
+     - 方法：ListModes、SetMode、GetHistory(limit) 回傳 JSON、CopyHistory、Redo(id, mode)、StartLong、Stop、Cancel
+     - 訊號：HistoryChanged；錯誤以 `io.github.danwen.Error` 回傳中文訊息
+     - 名稱同時只能一個程式持有：第二個 danwen 會拒絕啟動（避免重複貼上）；連不上 session bus 時照常聽寫
+   - 5b 頂列圖示與選單、5c 錄音浮動提示、5d 安裝與移除
+   - 原規劃：頂列狀態圖示（待命／錄音／整理中）、錄音時的浮動提示、
    切換小紙條與瀏覽歷史的選單、設定畫面；也能提供目前焦點程式當上下文。
    - 與 danwen 常駐程式以 session D-Bus 溝通，因此 2～4 實作時先把狀態與操作整理成可對外的介面
    - 安裝在 `~/.local/share/gnome-shell/extensions/`，不碰 fcitx5；uninstall.sh 一併移除

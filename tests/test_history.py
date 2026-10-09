@@ -145,3 +145,33 @@ def test_daemon_reads_context_only_when_enabled(tmp_path, fake_llm, monkeypatch)
     last = llm.requests[-1][1]["messages"][-1]["content"]
     assert "黃保翕" in last and "選取的段落" not in last
     assert last.count("。") <= 50  # 有截斷
+
+
+def test_daemon_dbus_operations(tmp_path, fake_llm, monkeypatch):
+    monkeypatch.setattr(refine, "MODE_FILE", tmp_path / "mode")
+    copied = []
+    monkeypatch.setattr("danwen.output.Clipboard.set_text", classmethod(lambda cls, t: copied.append(t)))
+    llm = fake_llm("Our meeting is today.")
+    d = make_daemon(tmp_path, llm.url)
+    add(d.history, "嗯，今天開會。")
+
+    assert ("英文", "整理後翻譯成自然的英文") in d.list_modes()
+    d.set_mode("英文")
+    assert d.current_mode() == "英文"
+    assert json.loads(d.history_json(5))[0]["text"] == "嗯，今天開會。"
+    assert d.copy_history(0) == "嗯，今天開會。"
+    assert d.redo(0, "") == "Our meeting is today."  # 空字串＝目前的小紙條（英文）
+    assert copied == ["嗯，今天開會。", "Our meeting is today."]
+    assert d.history.get().redo_of == 1
+    with pytest.raises(RuntimeError, match="尚未就緒"):
+        d.start_long()  # 監聽還沒啟動
+
+
+def test_daemon_state_returns_to_idle_after_processing(tmp_path, fake_llm):
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d._set_state("processing")
+    d._finish_processing()
+    assert d.state == "idle"
+    d._set_state("recording", "long")
+    d._finish_processing()  # 正在錄下一段時不能被改成 idle
+    assert d.state == "recording" and d.kind == "long"

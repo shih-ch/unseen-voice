@@ -36,12 +36,13 @@ def _setup_logging(verbose: bool, to_file: bool) -> None:
 
 def cmd_run(args: argparse.Namespace, cfg: config.Config) -> int:
     from .daemon import Daemon
+    from .dbus_service import AlreadyRunning
     from .hotkey import NoKeyboardError
 
     try:
         daemon = Daemon(cfg)
         daemon.run()
-    except (NoKeyboardError, PermissionError, config.ConfigError, ValueError) as e:
+    except (NoKeyboardError, AlreadyRunning, PermissionError, config.ConfigError, ValueError) as e:
         msg = str(e)
         if isinstance(e, PermissionError) and "uinput" in msg:
             msg = "沒有權限使用 /dev/uinput（虛擬鍵盤）。請執行 install.sh，並登出再登入。"
@@ -253,14 +254,15 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
 
             subprocess.run([player, str(audio)], check=False)
         elif args.action == "redo":
+            from .history import redo_entry
+
             post = _postprocessor(cfg)
+            refiner = Refiner(cfg.refine)
             mode = args.mode or current_mode(cfg.refine.mode)
-            result = post(Refiner(cfg.refine).refine(entry.raw, mode, post.replacements.terms()))
-            Clipboard.set_text(result)
-            new = history.add(
-                duration_s=entry.duration_s, backend=entry.backend, raw=entry.raw, text=result,
-                mode=mode, redo_of=entry.id,
+            result, new = redo_entry(
+                history, entry.id, mode, lambda raw, m: post(refiner.refine(raw, m, post.replacements.terms()))
             )
+            Clipboard.set_text(result)
             saved = f"，存成第 {new.id} 筆" if new else ""
             print(f"[{mode}] 已複製到剪貼簿{saved}：\n{result}")
     except KeyError as e:

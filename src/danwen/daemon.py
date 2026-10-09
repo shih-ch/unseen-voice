@@ -1,7 +1,12 @@
-"""常駐流程：熱鍵 → 錄音 → ASR → 後處理 →（整理模式：LLM 整理）→ 貼上，並記錄各階段耗時。"""
+"""常駐流程：熱鍵 → 錄音 → ASR → 後處理 →（整理模式：LLM 整理）→ 貼上，並記錄各階段耗時。
+
+狀態（idle／recording／processing）與歷史紀錄、小紙條、長錄音的操作經 D-Bus 對外提供，給 GNOME extension 使用。
+"""
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 import queue
 import signal
@@ -16,11 +21,11 @@ from .asr import ASRUnavailable, create_backend
 from .audio import Recorder, dbfs
 from .config import Config, ConfigError
 from .feedback import Feedback
-from .history import History
+from .history import History, redo_entry
 from .hotkey import Action, HoldDetector, KeyboardListener, key_code
 from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
-from .refine import RefineError, Refiner, current_mode
+from .refine import RefineError, Refiner, available_prompts, current_mode, load_prompt, set_mode
 
 log = logging.getLogger(__name__)
 
@@ -47,11 +52,47 @@ class Daemon:
             History(size=cfg.history.size, keep_audio=cfg.history.keep_audio) if cfg.history.size > 0 else None
         )
         self.paster: Paster | None = None
+        self.dbus = None
+        self.state = "idle"  # idle / recording / processing
+        self.kind = ""  # fast / refine / long
+        self._state_lock = threading.Lock()
+        self._listener: KeyboardListener | None = None
         self._refining = False
         self._jobs: queue.Queue[tuple[np.ndarray, float, bool] | None] = queue.Queue()
         self._stop = threading.Event()
 
+    def _start_dbus(self) -> None:
+        from .dbus_service import AlreadyRunning, DBusService
+
+        service = DBusService(self)
+        try:
+            service.start()
+        except AlreadyRunning:
+            raise
+        except Exception as e:
+            log.warning("D-Bus 介面無法啟用（GNOME extension 會連不上），聽寫不受影響：%s", e)
+            return
+        self.dbus = service
+
+    def _set_state(self, state: str, kind: str | None = None) -> None:
+        with self._state_lock:
+            self.state = state
+            if kind is not None:
+                self.kind = kind
+        if self.dbus:
+            self.dbus.notify_state()
+
+    def _finish_processing(self) -> None:
+        with self._state_lock:
+            # 處理期間又開始新的錄音，或還有排隊的工作時，維持原狀態
+            if self.state != "processing" or not self._jobs.empty():
+                return
+            self.state = "idle"
+        if self.dbus:
+            self.dbus.notify_state()
+
     def run(self) -> None:
+        self._start_dbus()  # 先確認沒有另一個 danwen 在執行
         t = time.monotonic()
         self.backend.prepare()
         log.info("ASR backend %s 就緒（%.1f 秒）", self.backend.name, time.monotonic() - t)
@@ -61,6 +102,7 @@ class Daemon:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: self._stop.set())
         listener = KeyboardListener(self.detector, self._on_action, ignore_names={VKBD_NAME})
+        self._listener = listener
         log.info(
             "就緒：按住 %s 說話%s%s", self.cfg.hotkey.key,
             "；先短按一下再按住＝整理模式" if self.refiner else "",
@@ -74,6 +116,8 @@ class Daemon:
             worker.join(timeout=5)
             self.paster.close()
             self.backend.close()
+            if self.dbus:
+                self.dbus.stop()
 
     def _on_action(self, action: Action) -> None:
         now = time.monotonic()
@@ -85,7 +129,9 @@ class Daemon:
                 self.recorder.start()
             except Exception as e:
                 self.feedback.error(f"無法開啟麥克風：{e}")
+                self._set_state("idle")
                 return
+            self._set_state("recording", "long" if long else "refine" if self._refining else "fast")
             self.feedback.start(refine=self._refining, long=long)
             if long:
                 self.feedback.info("長錄音中：再按一下熱鍵結束，Esc 取消")
@@ -94,9 +140,11 @@ class Daemon:
         elif action is Action.STOP:
             audio = self.recorder.stop()
             self.feedback.stop()
+            self._set_state("processing")
             self._jobs.put((audio, now, self._refining))
         elif action is Action.CANCEL:
             self.recorder.stop()
+            self._set_state("idle")
             log.info("錄音已取消（組合鍵或 Esc）")
 
     def _worker(self) -> None:
@@ -108,6 +156,8 @@ class Daemon:
             except Exception as e:
                 log.exception("聽寫失敗")
                 self.feedback.error(f"聽寫失敗：{e}")
+            finally:
+                self._finish_processing()
 
     def _context(self) -> dict[str, str] | None:
         """在貼上之前讀取剪貼簿／選取的文字當參考資料（設定開啟才讀）。只記錄字數，不記錄內容。"""
@@ -176,3 +226,69 @@ class Daemon:
                 )
             except OSError:
                 log.exception("寫入歷史紀錄失敗")
+            else:
+                if self.dbus:
+                    self.dbus.notify_history()
+
+    # ---- 給 D-Bus（GNOME extension）用的操作 ----
+
+    def current_mode(self) -> str:
+        return current_mode(self.cfg.refine.mode)
+
+    def list_modes(self) -> list[tuple[str, str]]:
+        modes = []
+        for name in available_prompts():
+            try:
+                description = load_prompt(name).description
+            except ConfigError:
+                description = "（格式錯誤）"
+            modes.append((name, description))
+        return modes
+
+    def set_mode(self, name: str) -> None:
+        set_mode(name)
+
+    def _require_history(self) -> History:
+        if self.history is None:
+            raise RuntimeError("歷史紀錄未啟用（history.size 為 0）")
+        return self.history
+
+    def history_json(self, limit: int) -> str:
+        if self.history is None:
+            return "[]"
+        entries = self.history.entries()
+        if limit > 0:
+            entries = entries[:limit]
+        return json.dumps([dataclasses.asdict(e) for e in entries], ensure_ascii=False)
+
+    def copy_history(self, entry_id: int) -> str:
+        entry = self._require_history().get(entry_id or None)
+        Clipboard.set_text(entry.text)
+        return entry.text
+
+    def redo(self, entry_id: int, mode: str) -> str:
+        if self.refiner is None:
+            raise RuntimeError("整理模式未啟用（hotkey.double_tap_ms 為 0）")
+        terms = self.post.replacements.terms()
+        result, _ = redo_entry(
+            self._require_history(), entry_id, mode or self.current_mode(),
+            lambda raw, m: self.post(self.refiner.refine(raw, m, terms)),
+        )
+        Clipboard.set_text(result)
+        if self.dbus:
+            self.dbus.notify_history()
+        return result
+
+    def _post(self, command) -> None:
+        if self._listener is None:
+            raise RuntimeError("danwen 尚未就緒")
+        self._listener.post(command)
+
+    def start_long(self) -> None:
+        self._post(lambda detector, now: detector.start_long(now))
+
+    def stop_recording(self) -> None:
+        self._post(lambda detector, now: detector.stop())
+
+    def cancel_recording(self) -> None:
+        self._post(lambda detector, now: detector.cancel())

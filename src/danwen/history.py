@@ -12,7 +12,7 @@ import dataclasses
 import fcntl
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -138,3 +138,16 @@ class History:
                     (self.directory / e.audio).unlink(missing_ok=True)
             self._save([])
             return len(entries)
+
+
+def redo_entry(
+    history: History, entry_id: int | None, mode: str, refine: Callable[[str, str], str]
+) -> tuple[str, Entry | None]:
+    """把某一筆的辨識結果用另一張小紙條重新整理；結果存成新的一筆。entry_id 為 None 或 0＝最新一筆。"""
+    entry = history.get(entry_id or None)
+    result = refine(entry.raw, mode)
+    new = history.add(
+        duration_s=entry.duration_s, backend=entry.backend, raw=entry.raw, text=result,
+        mode=mode, redo_of=entry.id,
+    )
+    return result, new

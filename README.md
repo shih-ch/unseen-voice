@@ -141,6 +141,18 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 聽寫完成 錄音=10.21s ASR=0.281s 後處理=0.001s 貼上=0.062s 放開到貼上=0.402s 字數=48 backend=sensevoice
 ```
 
+## D-Bus 介面
+
+常駐時在 session bus 提供 `io.github.danwen`（給 GNOME extension 用，也可自行呼叫），例如：
+
+```bash
+gdbus call --session --dest io.github.danwen --object-path /io/github/danwen \
+  --method io.github.danwen.Daemon1.StartLong          # 開始長錄音
+busctl --user get-property io.github.danwen /io/github/danwen io.github.danwen.Daemon1 State
+```
+
+同一時間只能有一個 danwen 執行；已經有一個在跑時，第二個會拒絕啟動（避免每句話貼上兩次）。
+
 ## 暫停與移除
 
 ```bash

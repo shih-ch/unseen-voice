@@ -225,3 +225,27 @@ def test_reset_cancels_long():
     d = make_long()
     double_tap(d)
     assert d.reset() is Action.CANCEL
+
+
+def test_external_start_and_stop_long():
+    d = make_long()
+    assert d.start_long(0.0) is Action.START_LONG
+    assert d.start_long(1.0) is None  # 已在錄音
+    assert d.stop() is Action.STOP
+    assert not d.recording
+    assert d.stop() is None
+
+
+def test_external_cancel_and_hold_mode():
+    d = make_long()
+    d.start_long(0.0)
+    assert d.cancel() is Action.CANCEL
+    d.on_key(HOT, KEY_DOWN, 1.0)
+    d.on_tick(1.31)  # 按住錄音中
+    assert d.stop() is Action.STOP
+    assert d.on_key(HOT, KEY_UP, 2.0) is None  # 放開時不會再停一次
+    assert not d.recording
+
+
+def test_external_start_long_disabled():
+    assert make_dt().start_long(0.0) is None
