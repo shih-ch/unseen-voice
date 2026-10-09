@@ -179,5 +179,31 @@
 - 實測：Groq 三種語言都正確（每句 0.3～0.7 秒，長句約 2 秒）；本機 qwen3:4b 英文、簡體正確，
   日文曾把「不對，是下週四」翻錯，翻日文建議用雲端
 
+## 與 ZeroType 的差距（2026-10-09 盤點）與下一步路線圖
+對照保哥 ZeroType（[課程頁](https://zerotype.gh.miniasp.com/)、
+[使用者心得](https://www.opasschang.com/blog/i-paid-2800-for-voice-input-class-then-forked-instead)）。
+
+已有：按住說話、長錄音、雲端 Whisper（可選，預設本機）、小紙條（日常／Slack／會議記錄／Email／翻譯，可自訂）、
+刪贅詞與補標點、台灣繁體、自訂字典、貼上後還原剪貼簿、歷史 20 筆（複製／重聽／換小紙條重新整理）、
+上下文（剪貼簿、選取文字）、自選服務商。
+
+做法不同：
+- 切換小紙條：ZeroType 是按住錄音鍵時按 0～9；danwen 只監聽不攔截按鍵，數字會同時送進程式，
+  改用滾輪、Super+Alt+數字、選單
+- 設定：ZeroType 有設定畫面；danwen 用頂列選單切換常用項目，其餘改 YAML
+
+刻意不做：語音指令（讓 LLM 執行系統動作有 prompt injection 風險）
+
+還沒做的（依實用程度排序，括號為工作量）：
+1. 依目前的 App 調整貼法（中）：extension 透過 D-Bus 提供焦點視窗的程式（wm_class），
+   終端機改送 Ctrl+Shift+V、貼不進去的程式改用模擬打字；也可把目前的 App 當上下文
+   （例如在 Slack 裡自動用 Slack 小紙條）。ZeroType 對 Word、Outlook 用模擬打字
+2. 歷史搜尋（小）：`danwen history search`，選單也可加
+3. 設定畫面（中～大）：extension 的設定頁（prefs.js），在「擴充功能」App 裡就能改
+4. 字典自動產生規則（中）：例如從使用者改過的整理結果找出常錯的詞，建議加進字典
+5. 螢幕內容當上下文（大）：截圖＋文字辨識；送雲端前要讓使用者先確認內容，隱私風險最高，最後再考慮
+
+其他待辦：方案 D（Cloudflare）待使用者填 account_id、設定金鑰後實測，再決定整理用的模型
+
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示
