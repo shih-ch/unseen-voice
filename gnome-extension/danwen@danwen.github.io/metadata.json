@@ -1,0 +1,7 @@
+{
+  "uuid": "danwen@danwen.github.io",
+  "name": "但聞人語",
+  "description": "地端語音聽寫 danwen 的頂列狀態圖示與選單：切換小紙條、最近的聽寫、長錄音。需要 danwen 常駐程式。",
+  "shell-version": ["46"],
+  "version": 1
+}

@@ -102,7 +102,14 @@
      - 方法：ListModes、SetMode、GetHistory(limit) 回傳 JSON、CopyHistory、Redo(id, mode)、StartLong、Stop、Cancel
      - 訊號：HistoryChanged；錯誤以 `io.github.danwen.Error` 回傳中文訊息
      - 名稱同時只能一個程式持有：第二個 danwen 會拒絕啟動（避免重複貼上）；連不上 session bus 時照常聽寫
-   - 5b 頂列圖示與選單、5c 錄音浮動提示、5d 安裝與移除
+   - ✅ 5b 頂列圖示與選單（`gnome-extension/danwen@danwen.github.io/`，GNOME 46）
+     - 圖示：待命一般色、錄音紅色、辨識整理中黃色「…」、danwen 未執行時灰色
+     - 選單：狀態列、開始長錄音／結束／取消、切換小紙條（打勾）、最近 5 筆（點一下複製）、
+       換小紙條重新整理最新一筆、開啟設定檔／替換字典／小紙條資料夾；未執行時可「啟動 danwen」
+     - GNOME 不開啟空選單，因此骨架先建好；狀態改變只更新狀態列與長錄音按鈕，清單在打開時才讀取
+     - 開發測試：`dev/nested-shell.sh` 在視窗裡跑巢狀 GNOME Shell（獨立 dconf、extension 目錄與 D-Bus，
+       原生 GNOME 模式以避開 Ubuntu 的 DING 在巢狀環境崩潰重啟），搭配假的 danwen（`dev/fake_danwen.py`）
+   - 5c 錄音浮動提示、5d 安裝與移除
    - 原規劃：頂列狀態圖示（待命／錄音／整理中）、錄音時的浮動提示、
    切換小紙條與瀏覽歷史的選單、設定畫面；也能提供目前焦點程式當上下文。
    - 與 danwen 常駐程式以 session D-Bus 溝通，因此 2～4 實作時先把狀態與操作整理成可對外的介面

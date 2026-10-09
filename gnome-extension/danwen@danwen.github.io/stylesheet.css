@@ -1,0 +1,16 @@
+/* 但聞人語：頂列圖示依狀態變色 */
+.danwen-offline {
+  color: rgba(160, 160, 160, 0.6);
+}
+
+.danwen-recording {
+  color: #e01b24;
+}
+
+.danwen-processing {
+  color: #e5a50a;
+}
+
+.danwen-status {
+  font-weight: bold;
+}

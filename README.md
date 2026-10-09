@@ -183,6 +183,8 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 uv sync
 uv run pytest
 uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
+dev/nested-shell.sh       # 在視窗裡跑隔離的 GNOME Shell 測試 extension（搭配假的 danwen，不影響目前的桌面）
+DANWEN_FAKE_CYCLE=1 dev/nested-shell.sh   # 假 danwen 自動輪流切換狀態，看圖示變色
 ```
 
 ## 架構
