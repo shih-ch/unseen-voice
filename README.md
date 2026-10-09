@@ -305,6 +305,14 @@ dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |
 | `src/danwen/bench.py` | benchmark |
 
+## 致謝
+
+- 保哥 ZeroType 課程介紹的「語音先辨識，再交給 LLM 依提示詞整理」兩段式設計，是整理模式的出發點
+- [SenseVoice](https://github.com/FunAudioLLM/SenseVoice)（語音辨識模型）與 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（本機推論）
+- [Silero VAD](https://github.com/snakers4/silero-vad)（長錄音切段）、[OpenCC](https://github.com/BYVoid/OpenCC)（轉繁體與台灣用語）、
+  [whisper.cpp](https://github.com/ggml-org/whisper.cpp)（backend B）
+- 本專案與 [Claude Code](https://claude.com/claude-code) 協作開發：我負責需求、實測與決定，Claude Code 負責程式、測試與查資料
+
 ## 授權
 
 [MIT](LICENSE)
