@@ -7,6 +7,8 @@ hotkey:
   key: KEY_RIGHTCTRL
   # 按住超過這個時間（毫秒）才開始錄音；短按不會觸發
   hold_ms: 300
+  # 整理模式：先短按一下熱鍵，在這個時間（毫秒）內再按住說話；0＝停用整理模式
+  double_tap_ms: 400
 
 audio:
   # 麥克風：null＝系統預設；也可填裝置名稱的一部分或編號（`danwen devices` 列出）
@@ -40,6 +42,19 @@ postprocess:
   opencc: s2twp
   # 替換字典路徑；null＝~/.config/danwen/replacements.yaml（不存在時用內建預設）
   replacements: null
+
+refine:
+  # 整理模式用的 LLM。ollama＝本機 Ollama（離線）；openai＝任何 OpenAI 相容服務（Groq、OpenAI 等，需連網）
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3:4b-instruct-2507-q4_K_M
+  # provider: openai 時，存放 API Key 的檔案（請 chmod 600），例如 ~/.config/danwen/api_key
+  api_key_file: null
+  timeout_s: 30.0
+  # ollama：用過後模型留在記憶體多久（約佔 3 GB）；開始錄音時會先載入
+  keep_alive: 30m
+  # 預設的小紙條（~/.config/danwen/prompts/ 裡的檔名）；可用 `danwen mode` 隨時切換
+  mode: 日常
 
 output:
   # 貼上後還原原本的剪貼簿

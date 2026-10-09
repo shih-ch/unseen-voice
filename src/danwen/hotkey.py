@@ -1,4 +1,5 @@
 """熱鍵：按住超過門檻才開始錄音；按住期間按了其他鍵就視為組合鍵並取消。
+先短按一下、很快再按住，則是整理模式（START_REFINE）。
 
 HoldDetector 是純邏輯、不碰裝置，方便測試；KeyboardListener 負責讀 /dev/input。
 監聽只讀取事件、不獨占裝置（不 grab），所有按鍵照常送到 GNOME 與 fcitx5。
@@ -27,6 +28,7 @@ _FIRST_BUTTON = 0x100
 
 class Action(enum.Enum):
     START = "start"
+    START_REFINE = "start_refine"
     STOP = "stop"
     CANCEL = "cancel"
 
@@ -39,13 +41,16 @@ class _State(enum.Enum):
 
 
 class HoldDetector:
-    def __init__(self, key: int, hold_s: float, max_s: float):
+    def __init__(self, key: int, hold_s: float, max_s: float, double_tap_s: float = 0.0):
         self.key = key
         self.hold_s = hold_s
         self.max_s = max_s
+        self.double_tap_s = double_tap_s
         self._state = _State.IDLE
         self._since = 0.0
         self._held: set[int] = set()
+        self._last_tap: float | None = None  # 上一次短按熱鍵放開的時間
+        self._refine = False
 
     @property
     def recording(self) -> bool:
@@ -65,17 +70,26 @@ class HoldDetector:
         if code == self.key:
             if value == KEY_DOWN:
                 if self._state is _State.IDLE:
+                    self._refine = (
+                        self.double_tap_s > 0
+                        and self._last_tap is not None
+                        and now - self._last_tap <= self.double_tap_s
+                    )
+                    self._last_tap = None
                     # 先按住其他鍵再按熱鍵（例如 Shift+右Ctrl）也是組合鍵
                     self._state = _State.COMBO if self._held else _State.ARMED
                     self._since = now
                 return None
-            was_recording = self._state is _State.RECORDING
+            previous = self._state
             self._state = _State.IDLE
-            return Action.STOP if was_recording else None
+            if previous is _State.ARMED:
+                self._last_tap = now  # 短按一下；接著很快再按住就是整理模式
+            return Action.STOP if previous is _State.RECORDING else None
         if code >= _FIRST_BUTTON:
             return None
         if value == KEY_DOWN:
             self._held.add(code)
+            self._last_tap = None
             if self._state is _State.ARMED:
                 self._state = _State.COMBO
             elif self._state is _State.RECORDING:
@@ -89,7 +103,7 @@ class HoldDetector:
         if self._state is _State.ARMED and now - self._since >= self.hold_s:
             self._state = _State.RECORDING
             self._since = now
-            return Action.START
+            return Action.START_REFINE if self._refine else Action.START
         if self._state is _State.RECORDING and now - self._since >= self.max_s:
             self._state = _State.COMBO
             return Action.STOP
@@ -100,6 +114,7 @@ class HoldDetector:
         was_recording = self._state is _State.RECORDING
         self._state = _State.IDLE
         self._held.clear()
+        self._last_tap = None
         return Action.CANCEL if was_recording else None
 
 

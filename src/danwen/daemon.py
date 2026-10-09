@@ -1,4 +1,4 @@
-"""常駐流程：熱鍵 → 錄音 → ASR → 後處理 → 貼上，並記錄各階段耗時。"""
+"""常駐流程：熱鍵 → 錄音 → ASR → 後處理 →（整理模式：LLM 整理）→ 貼上，並記錄各階段耗時。"""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ import numpy as np
 
 from .asr import ASRUnavailable, create_backend
 from .audio import Recorder, dbfs
-from .config import Config
+from .config import Config, ConfigError
 from .feedback import Feedback
 from .hotkey import Action, HoldDetector, KeyboardListener, key_code
 from .output import VKBD_NAME, Paster
 from .postprocess import PostProcessor
+from .refine import RefineError, Refiner, current_mode
 
 log = logging.getLogger(__name__)
 
@@ -33,10 +34,15 @@ class Daemon:
             cfg.postprocess.opencc, Path(replacements).expanduser() if replacements else None
         )
         self.detector = HoldDetector(
-            key_code(cfg.hotkey.key), cfg.hotkey.hold_ms / 1000, cfg.audio.max_duration_s
+            key_code(cfg.hotkey.key),
+            cfg.hotkey.hold_ms / 1000,
+            cfg.audio.max_duration_s,
+            cfg.hotkey.double_tap_ms / 1000,
         )
+        self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
         self.paster: Paster | None = None
-        self._jobs: queue.Queue[tuple[np.ndarray, float] | None] = queue.Queue()
+        self._refining = False
+        self._jobs: queue.Queue[tuple[np.ndarray, float, bool] | None] = queue.Queue()
         self._stop = threading.Event()
 
     def run(self) -> None:
@@ -49,7 +55,7 @@ class Daemon:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: self._stop.set())
         listener = KeyboardListener(self.detector, self._on_action, ignore_names={VKBD_NAME})
-        log.info("就緒：按住 %s 說話", self.cfg.hotkey.key)
+        log.info("就緒：按住 %s 說話%s", self.cfg.hotkey.key, "；先短按一下再按住＝整理模式" if self.refiner else "")
         try:
             listener.run(self._stop)
         finally:
@@ -61,17 +67,20 @@ class Daemon:
 
     def _on_action(self, action: Action) -> None:
         now = time.monotonic()
-        if action is Action.START:
+        if action in (Action.START, Action.START_REFINE):
+            self._refining = action is Action.START_REFINE and self.refiner is not None
             try:
                 self.recorder.start()
             except Exception as e:
                 self.feedback.error(f"無法開啟麥克風：{e}")
                 return
-            self.feedback.start()
+            self.feedback.start(refine=self._refining)
+            if self._refining:
+                self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
             audio = self.recorder.stop()
             self.feedback.stop()
-            self._jobs.put((audio, now))
+            self._jobs.put((audio, now, self._refining))
         elif action is Action.CANCEL:
             self.recorder.stop()
             log.info("按住期間按了其他鍵，取消錄音")
@@ -86,7 +95,7 @@ class Daemon:
                 log.exception("聽寫失敗")
                 self.feedback.error(f"聽寫失敗：{e}")
 
-    def _process(self, audio: np.ndarray, released: float) -> None:
+    def _process(self, audio: np.ndarray, released: float, refine: bool) -> None:
         sr = self.cfg.audio.sample_rate
         duration = audio.size / sr
         if duration < self.cfg.audio.min_duration_s:
@@ -101,12 +110,22 @@ class Daemon:
         t1 = time.monotonic()
         text = self.post(raw)
         t2 = time.monotonic()
+        mode = ""
+        if refine and text:
+            mode = current_mode(self.cfg.refine.mode)
+            try:
+                # LLM 可能輸出簡體字或「臺」，整理後再過一次轉換與替換字典
+                text = self.post(self.refiner.refine(text, mode))
+            except (RefineError, ConfigError) as e:
+                self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
+        t3 = time.monotonic()
         if text:
             self.paster.paste(text)
-        t3 = time.monotonic()
+        t4 = time.monotonic()
         log.info(
-            "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s",
-            duration, t1 - t0, t2 - t1, t3 - t2, t3 - released, len(text), self.backend.name,
+            "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 整理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s%s",
+            duration, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - released, len(text), self.backend.name,
+            f" 小紙條={mode}" if mode else "",
         )
         if self.cfg.log.log_text:
             log.info("文字：%s", text)

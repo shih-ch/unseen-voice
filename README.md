@@ -33,6 +33,41 @@ GNOME Wayland 上的地端語音聽寫：**按住右 Ctrl 說話，放開後自�
 | 按住右 Ctrl 超過 0.3 秒 | 「嘟↑」開始錄音 |
 | 放開 | 「嘟↓」結束，辨識後貼到游標位置 |
 | 按住期間按了其他鍵（例如 Ctrl+Space） | 視為組合鍵，取消錄音 |
+| **先短按一下右 Ctrl，0.4 秒內再按住** | 「嘟嘟嘟↑」整理模式：辨識後交給本機 LLM 整理再貼上 |
+
+### 整理模式
+
+快速模式只做辨識與轉繁體（約 0.3 秒）；整理模式另外交給 LLM 依「小紙條」整理，例如：
+
+| 口述 | 整理後（小紙條：日常） |
+|---|---|
+| 嗯，那個我們明天下午三點開會，不對，應該是四點，然後要討論三件事，第一是預算，第二是人力，第三是把這個PR merge到main。 | 我們明天下午四點開會，要討論三件事：<br>1. 預算<br>2. 人力<br>3. 把這個 PR merge 到 main |
+| 幫我寫一首關於秋天的詩。 | 幫我寫一首關於秋天的詩。（只整理，不會回答或執行內容） |
+
+- 預設用本機 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M`，完全離線；需先 `ollama pull` 這個模型
+- 開始錄音時就先載入模型；載入後每句約 2～3 秒，用過後模型留在記憶體 30 分鐘（約 3 GB）
+- LLM 沒回應、輸出空白、比原文長太多（像在回答問題）或語言變了，會通知並**改貼原文**
+- 內建三張小紙條：`日常`（預設）、`會議記錄`、`英文`（翻譯）。小紙條放在 `~/.config/danwen/prompts/*.yaml`，
+  可自行修改或新增，檔名就是模式名稱
+
+```bash
+danwen mode                 # 列出小紙條與目前模式
+danwen mode 會議記錄          # 切換（立即生效，不必重新啟動）
+danwen refine "嗯，那個……"    # 不用說話，直接測試整理效果
+```
+
+想用快捷鍵切換：GNOME「設定 → 鍵盤 → 檢視及自訂快捷鍵 → 自訂快捷鍵」，指令填
+`/home/你的帳號/.local/bin/danwen mode 會議記錄`，切換時會跳出通知。
+
+想要更好的整理品質，可改用雲端（需連網，文字會送到該服務；語音辨識仍在本機）：
+
+```yaml
+refine:
+  provider: openai                       # 任何 OpenAI 相容服務
+  base_url: https://api.groq.com/openai/v1
+  model: <服務提供的模型名稱>
+  api_key_file: ~/.config/danwen/api_key # chmod 600
+```
 
 - 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
@@ -52,6 +87,7 @@ systemctl --user restart danwen
 ```bash
 danwen devices            # 列出麥克風與鍵盤
 danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上
+danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
 danwen bench              # 對 samples/*.wav 分別跑 backend A、B，比較耗時與文字
 danwen bench -b A f.wav   # 只跑 backend A
 danwen download -b B      # 預先下載模型
@@ -99,10 +135,10 @@ uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
 ## 架構
 
 ```
-熱鍵（evdev，只監聽不攔截）→ 錄音（sounddevice 16 kHz）→ ASR backend → 後處理 → 貼上
-                                                      │                     │
-                               A：SenseVoice（sherpa-onnx, CPU）     去標籤 → OpenCC s2twp → 替換字典
-                               B：whisper.cpp server（Vulkan, HTTP）
+熱鍵（evdev，只監聽不攔截）→ 錄音（sounddevice 16 kHz）→ ASR backend → 後處理 →（整理模式）→ 貼上
+                                                      │                     │                │
+                               A：SenseVoice（sherpa-onnx, CPU）     去標籤 → OpenCC     LLM 依小紙條整理
+                               B：whisper.cpp server（Vulkan, HTTP）  → 替換字典        → 再過一次後處理
 貼上：備份剪貼簿 → xclip（經 XWayland，不搶焦點）→ 虛擬鍵盤 Ctrl+V → 0.5 秒後還原
 ```
 
@@ -112,6 +148,8 @@ uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
 | `src/danwen/audio.py` | 錄音、WAV 讀寫 |
 | `src/danwen/asr/` | backend 介面與兩種實作 |
 | `src/danwen/postprocess.py` | 去標籤、OpenCC、替換字典 |
+| `src/danwen/refine.py` | 整理模式：小紙條、Ollama／OpenAI 相容 API、防呆 |
+| `src/danwen/data/prompts/` | 內建小紙條 |
 | `src/danwen/output.py` | 剪貼簿與虛擬鍵盤 |
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |
 | `src/danwen/bench.py` | benchmark |

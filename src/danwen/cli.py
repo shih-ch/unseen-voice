@@ -1,4 +1,4 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | refine | init-config"""
 
 from __future__ import annotations
 
@@ -113,14 +113,61 @@ def cmd_paste_test(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def cmd_mode(args: argparse.Namespace, cfg: config.Config) -> int:
+    from . import refine
+
+    if args.name:
+        refine.set_mode(args.name)
+        print(f"整理模式改用小紙條：{args.name}")
+        if not sys.stdout.isatty():
+            # 從 GNOME 自訂快捷鍵執行時看不到終端機，改用桌面通知告知
+            from .feedback import Feedback
+
+            Feedback(sounds=False).notice(f"整理模式改用小紙條：{args.name}")
+        return 0
+    current = refine.current_mode(cfg.refine.mode)
+    print("小紙條（＊為目前使用中；切換：danwen mode 名稱）：")
+    for name, path in refine.available_prompts().items():
+        try:
+            description = refine.load_prompt(name).description
+        except config.ConfigError as e:
+            description = f"（格式錯誤：{e}）"
+        mark = "＊" if name == current else "  "
+        print(f"  {mark}{name:<6} {description}  [{path}]")
+    return 0
+
+
+def cmd_refine(args: argparse.Namespace, cfg: config.Config) -> int:
+    import time
+
+    from .postprocess import PostProcessor
+    from .refine import RefineError, Refiner, current_mode
+
+    replacements = cfg.postprocess.replacements
+    post = PostProcessor(cfg.postprocess.opencc, Path(replacements).expanduser() if replacements else None)
+    refiner = Refiner(cfg.refine)
+    mode = args.mode or current_mode(cfg.refine.mode)
+    text = post(args.text)
+    t = time.monotonic()
+    try:
+        result = post(refiner.refine(text, mode))
+    except RefineError as e:
+        print(f"整理失敗（實際使用時會改貼原文）：{e}", file=sys.stderr)
+        return 1
+    print(f"[{mode}，{time.monotonic() - t:.2f} 秒]\n{result}")
+    return 0
+
+
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    for name in ("config.yaml", "replacements.yaml"):
-        dest = paths.CONFIG_DIR / name
+    targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
+    targets += [(f, paths.CONFIG_DIR / "prompts" / f.name) for f in sorted((paths.DATA_DIR / "prompts").glob("*.yaml"))]
+    for src, dest in targets:
         if dest.exists():
             print(f"已存在，保留：{dest}")
         else:
-            shutil.copyfile(paths.DATA_DIR / name, dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
             print(f"已建立：{dest}")
     return 0
 
@@ -142,7 +189,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("paste-test", help="倒數後把一段文字貼到目前的輸入框，測試貼上流程")
     p.add_argument("text", nargs="?", default="但聞人語測試：把這個PR merge到main，台灣繁體中文。")
     p.add_argument("--delay", type=int, default=3, help="倒數秒數（預設 3）")
-    sub.add_parser("init-config", help="建立預設設定檔與替換字典（不覆蓋既有檔案）")
+    p = sub.add_parser("mode", help="列出或切換整理模式的小紙條")
+    p.add_argument("name", nargs="?", help="要切換到的小紙條名稱")
+    p = sub.add_parser("refine", help="用整理模式整理一段文字（測試小紙條用）")
+    p.add_argument("text", help="要整理的文字")
+    p.add_argument("-m", "--mode", help="使用的小紙條（預設為目前模式）")
+    sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)
     command = args.command or "run"
@@ -158,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         "download": cmd_download,
         "devices": cmd_devices,
         "paste-test": cmd_paste_test,
+        "mode": cmd_mode,
+        "refine": cmd_refine,
         "init-config": cmd_init_config,
     }[command]
     try:

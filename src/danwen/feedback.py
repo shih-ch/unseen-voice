@@ -32,8 +32,13 @@ class Feedback:
         self._files: dict[str, Path] = {}
         if self._player:
             paths.SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
-            # 開始：上揚兩音；結束：下降兩音
-            for name, freqs in (("start", (660.0, 990.0)), ("stop", (990.0, 660.0))):
+            # 開始：上揚兩音；整理模式開始：上揚三音；結束：下降兩音
+            tones = {
+                "start": (660.0, 990.0),
+                "start_refine": (660.0, 880.0, 1100.0),
+                "stop": (990.0, 660.0),
+            }
+            for name, freqs in tones.items():
                 f = paths.SOUNDS_DIR / f"{name}.wav"
                 if not f.exists():
                     f.write_bytes(_tone(freqs))
@@ -46,16 +51,23 @@ class Feedback:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
 
-    def start(self) -> None:
-        self._play("start")
+    def start(self, refine: bool = False) -> None:
+        self._play("start_refine" if refine else "start")
 
     def stop(self) -> None:
         self._play("stop")
 
-    def error(self, message: str) -> None:
-        log.error(message)
+    def _notify(self, message: str, urgency: str) -> None:
         if self.notify_errors and shutil.which("notify-send"):
             subprocess.Popen(
-                ["notify-send", f"--app-name={APP_NAME}", "--urgency=critical", APP_NAME, message],
+                ["notify-send", f"--app-name={APP_NAME}", f"--urgency={urgency}", APP_NAME, message],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+
+    def error(self, message: str) -> None:
+        log.error(message)
+        self._notify(message, "critical")
+
+    def notice(self, message: str) -> None:
+        log.warning(message)
+        self._notify(message, "normal")

@@ -93,3 +93,63 @@ def test_reset_cancels_recording_and_clears_held_keys():
 
 def test_key_code():
     assert key_code("KEY_RIGHTCTRL") == HOT
+
+
+def make_dt() -> HoldDetector:
+    return HoldDetector(HOT, hold_s=0.3, max_s=10.0, double_tap_s=0.4)
+
+
+def test_tap_then_hold_is_refine():
+    d = make_dt()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)  # 短按一下
+    d.on_key(HOT, KEY_DOWN, 0.3)  # 0.2 秒後再按住
+    assert d.on_tick(0.61) is Action.START_REFINE
+    assert d.on_key(HOT, KEY_UP, 2.0) is Action.STOP
+
+
+def test_slow_second_press_is_normal_dictation():
+    d = make_dt()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(HOT, KEY_DOWN, 0.6)  # 超過 0.4 秒才再按
+    assert d.on_tick(0.91) is Action.START
+
+
+def test_refine_only_applies_once():
+    d = make_dt()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(HOT, KEY_DOWN, 0.2)
+    assert d.on_tick(0.51) is Action.START_REFINE
+    d.on_key(HOT, KEY_UP, 1.0)
+    d.on_key(HOT, KEY_DOWN, 1.2)  # 錄音結束後再按住：不是短按後的連按
+    assert d.on_tick(1.51) is Action.START
+
+
+def test_other_key_between_taps_breaks_double_tap():
+    d = make_dt()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(ecodes.KEY_A, KEY_DOWN, 0.15)
+    d.on_key(ecodes.KEY_A, KEY_UP, 0.18)
+    d.on_key(HOT, KEY_DOWN, 0.2)
+    assert d.on_tick(0.51) is Action.START
+
+
+def test_combo_tap_does_not_count_as_tap():
+    d = make_dt()
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(ecodes.KEY_C, KEY_DOWN, 0.05)  # 右 Ctrl+C
+    d.on_key(ecodes.KEY_C, KEY_UP, 0.08)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(HOT, KEY_DOWN, 0.2)
+    assert d.on_tick(0.51) is Action.START
+
+
+def test_double_tap_disabled():
+    d = make()  # double_tap_s=0
+    d.on_key(HOT, KEY_DOWN, 0.0)
+    d.on_key(HOT, KEY_UP, 0.1)
+    d.on_key(HOT, KEY_DOWN, 0.2)
+    assert d.on_tick(0.51) is Action.START

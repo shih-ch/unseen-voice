@@ -22,6 +22,7 @@ class ConfigError(ValueError):
 class HotkeyConfig:
     key: str = "KEY_RIGHTCTRL"
     hold_ms: int = 300
+    double_tap_ms: int = 400
 
 
 @dataclass
@@ -62,6 +63,17 @@ class PostprocessConfig:
 
 
 @dataclass
+class RefineConfig:
+    provider: str = "ollama"
+    base_url: str = "http://127.0.0.1:11434"
+    model: str = "qwen3:4b-instruct-2507-q4_K_M"
+    api_key_file: str | None = None
+    timeout_s: float = 30.0
+    keep_alive: str = "30m"
+    mode: str = "日常"
+
+
+@dataclass
 class OutputConfig:
     restore_clipboard: bool = True
     restore_delay_ms: int = 500
@@ -84,6 +96,7 @@ class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    refine: RefineConfig = field(default_factory=RefineConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     log: LogConfig = field(default_factory=LogConfig)

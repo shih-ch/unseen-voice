@@ -130,6 +130,17 @@ say "建立設定檔"
 say "下載 SenseVoice 模型（首次約 230 MB）"
 "$DANWEN_BIN" download -b sensevoice || warn "模型下載失敗，danwen 首次啟動時會再試"
 
+# ---- 整理模式需要的本機 Ollama（只檢查，不安裝也不下載模型） ----
+say "檢查整理模式用的 Ollama"
+REFINE_MODEL="$(sed -n 's/^  model: *//p' "$REPO/src/danwen/data/config.yaml" | tail -1)"
+if ! command -v ollama >/dev/null; then
+    info "沒有安裝 Ollama：整理模式會無法使用（失敗時改貼原文）；快速模式不受影響"
+elif ! ollama list 2>/dev/null | awk '{print $1}' | grep -qxF "$REFINE_MODEL"; then
+    info "Ollama 裡沒有 $REFINE_MODEL，要用整理模式請先執行：ollama pull $REFINE_MODEL"
+else
+    info "Ollama 與 $REFINE_MODEL 都已就緒"
+fi
+
 # ---- 6. backend B：whisper.cpp（選用） ----
 if [ "$WITH_WHISPER" = 1 ]; then
     say "編譯 whisper.cpp $WHISPER_TAG（Vulkan），需要幾分鐘"
