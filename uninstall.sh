@@ -113,6 +113,19 @@ done
 run systemctl --user daemon-reload
 run systemctl --user reset-failed danwen.service danwen-whisper.service 2>/dev/null || true
 
+# ---- GNOME 快捷鍵（danwen shortcuts install 新增的）：只移除 danwen 自己的項目 ----
+# 用專案裡的程式（只需要 Python 標準函式庫），不依賴已安裝的 danwen 版本
+say "GNOME 快捷鍵（切換小紙條）"
+SHORTCUT_NAMES="$(PYTHONPATH="$REPO/src" python3 -c \
+    'from danwen.shortcuts import Shortcuts; print("\n".join(n for n, _, _ in Shortcuts().status()))' 2>/dev/null || true)"
+if [ -n "$SHORTCUT_NAMES" ]; then
+    while IFS= read -r name; do info "$name"; done <<<"$SHORTCUT_NAMES"
+    run env PYTHONPATH="$REPO/src" python3 -c 'from danwen.shortcuts import Shortcuts; Shortcuts().remove()'
+    info "移除以上快捷鍵（其他自訂快捷鍵不受影響）"
+else
+    info "沒有設定"
+fi
+
 # ---- 雲端 API Key（GNOME 鑰匙圈）：要在移除 danwen 指令之前處理 ----
 say "GNOME 鑰匙圈裡的 API Key"
 DANWEN_BIN="$(uv tool dir --bin 2>/dev/null)/danwen"

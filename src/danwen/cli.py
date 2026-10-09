@@ -408,6 +408,35 @@ def cmd_cloud(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def cmd_shortcuts(args: argparse.Namespace, cfg: config.Config) -> int:
+    from .shortcuts import SHORTCUTS, ShortcutError, Shortcuts, danwen_command
+
+    shortcuts = Shortcuts()
+    try:
+        if args.action == "install":
+            added, skipped = shortcuts.install(danwen_command())
+            for sc in added:
+                print(f"  ✓ {sc.binding:<16} {sc.name}")
+            for sc, owner in skipped:
+                print(f"  ✗ {sc.binding:<16} {sc.name}（略過：已被「{owner}」使用）")
+            print("已設定 GNOME 快捷鍵；移除：danwen shortcuts remove")
+        elif args.action == "remove":
+            removed = shortcuts.remove()
+            print(f"已移除：{'、'.join(removed)}" if removed else "沒有 danwen 的快捷鍵")
+        else:
+            rows = shortcuts.status()
+            if not rows:
+                print("還沒有設定（danwen shortcuts install 會新增以下快捷鍵）：")
+                for sc in SHORTCUTS:
+                    print(f"  {sc.binding:<16} {sc.name}")
+            for name, binding, command in rows:
+                print(f"  {binding:<16} {name}　［{command}］")
+    except ShortcutError as e:
+        print(e, file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
@@ -462,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=("status", "set", "delete"), default="status")
     p.add_argument("provider", nargs="?", help="groq、openai、cloudflare、custom（預設為設定檔的 cloud.provider）")
     p.add_argument("--all", action="store_true", help="delete 時刪除 danwen 的全部金鑰")
+    p = sub.add_parser("shortcuts", help="GNOME 快捷鍵：切換小紙條（Super+Alt+M、Super+Alt+1～5）")
+    p.add_argument("action", nargs="?", choices=("status", "install", "remove"), default="status")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)
@@ -484,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         "history": cmd_history,
         "cloud": cmd_cloud,
         "key": cmd_key,
+        "shortcuts": cmd_shortcuts,
         "init-config": cmd_init_config,
     }[command]
     try:

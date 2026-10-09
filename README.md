@@ -80,9 +80,15 @@ log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的�
 快速切換小紙條：
 
 - **滑鼠停在工作列的麥克風圖示上滾動滾輪**：一格換一張，畫面中央會短暫顯示目前是哪張
-- **GNOME 自訂快捷鍵**：「設定 → 鍵盤 → 檢視及自訂快捷鍵 → 自訂快捷鍵」，指令填完整路徑，
-  例如 `/home/你的帳號/.local/bin/danwen mode 會議記錄`（一組鍵對應一張），
-  或 `/home/你的帳號/.local/bin/danwen mode next`（一組鍵輪流切換）；切換時會跳出通知
+- **GNOME 快捷鍵**：`danwen shortcuts install` 一次設定好（會先檢查按鍵有沒有被佔用，佔用的略過；
+  只新增，不動你原有的自訂快捷鍵；`danwen shortcuts remove` 移除，uninstall.sh 也會移除）：
+
+  | 快捷鍵 | 小紙條 |
+  |---|---|
+  | Super+Alt+M | 下一張（輪流） |
+  | Super+Alt+1～5 | 日常、會議記錄、Email、Slack、英文 |
+
+  切換時會跳出通知。想用別的按鍵，可在「設定 → 鍵盤 → 檢視及自訂快捷鍵 → 自訂快捷鍵」修改
 
 想要更好的整理品質，可改用雲端（需連網，文字會送到該服務；語音辨識仍在本機）：
 
@@ -229,6 +235,7 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 | GNOME extension：`~/.local/share/gnome-shell/extensions/danwen@danwen.github.io`，加入 enabled-extensions | 從 enabled／disabled-extensions 拿掉 danwen 這一項（執行中的 GNOME 立刻卸載）並刪除檔案；其他 extension 不受影響 |
 | 設定檔 `~/.config/danwen` | 詢問後刪除（預設保留，可能有你的替換字典） |
 | `danwen key set` 存進 GNOME 鑰匙圈的 API Key | 詢問後刪除（預設刪除） |
+| `danwen shortcuts install` 新增的 GNOME 快捷鍵 | 只移除 danwen 的項目 |
 | 模型 `~/.cache/danwen`、whisper.cpp `~/.local/share/danwen`、紀錄 `~/.local/state/danwen` | 刪除 |
 
 結束時同樣會比對輸入法設定並印出結果。共用的快取（`~/.cache/uv`、`~/.cache/mesa_shader_cache`）

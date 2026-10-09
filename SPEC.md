@@ -157,8 +157,11 @@
 ## 快速切換小紙條
 - extension：滑鼠停在圖示上滾動滾輪切換（間隔 0.25 秒內的多格忽略；觸控板累積一格才換），
   以 GNOME 內建的浮動提示（Main.osdWindowManager）顯示目前小紙條
-- `danwen mode next／prev`，可綁 GNOME 自訂快捷鍵；D-Bus `CycleMode(step)`
-- 不做：按住錄音鍵＋數字（danwen 攔不住按鍵，數字會同時送進程式）、由 install.sh 自動建立 GNOME 快捷鍵（可能與使用者既有快捷鍵衝突）
+- `danwen mode next／prev`；D-Bus `CycleMode(step)`
+- `danwen shortcuts install／remove／status`：新增 GNOME 自訂快捷鍵 Super+Alt+M（下一張）、Super+Alt+1～5
+  （日常、會議記錄、Email、Slack、英文）；路徑以 danwen- 開頭，只動自己的項目；
+  安裝前檢查 GNOME 內建與既有自訂快捷鍵，佔用的略過；uninstall.sh 以專案程式（只用標準函式庫）移除
+- 不做：按住錄音鍵＋數字（danwen 攔不住按鍵，數字會同時送進程式）、由 install.sh 自動建立 GNOME 快捷鍵（改為使用者明確執行 danwen shortcuts install）
 
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示
