@@ -23,6 +23,6 @@ def test_user_config_and_state_are_not_used():
     from danwen import paths, refine
 
     real = (Path.home() / ".config", Path.home() / ".local")
-    for path in (paths.CONFIG_FILE, paths.REPLACEMENTS_FILE, paths.HISTORY_DIR, refine.USER_PROMPTS_DIR,
+    for path in (paths.CONFIG_FILE, paths.REPLACEMENTS_FILE, paths.APPS_FILE, paths.HISTORY_DIR, refine.USER_PROMPTS_DIR,
                  refine.MODE_FILE, refine.LANGUAGE_FILE, cloud.STATE_FILE):
         assert not path.is_relative_to(real[0]) and not path.is_relative_to(real[1]), path

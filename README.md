@@ -5,7 +5,7 @@
 GNOME Wayland 上的語音聽寫：**按住右 Ctrl 說話，放開後自動貼上繁體中文**。
 
 - **快速模式**：語音辨識在本機（SenseVoice，CPU），不需連網，放開到貼上約 0.3 秒（方案 C、D 才改用雲端辨識）
-- **整理模式**：再交給 LLM 依「小紙條」刪贅詞、條列、改寫成 Email／Slack，或翻譯成英文、日文、簡體中文。
+- **整理模式**：再交給 LLM 依「小紙條」刪贅詞、條列、改寫成 Email、社群貼文，或翻譯成英文、日文、簡體中文。
   可用本機 Ollama（離線）或雲端；預設方案 B 用 Groq（需自備免費的 API Key，存在 GNOME 鑰匙圈）
 - 不動 fcitx5／IBus 設定，可以跟注音輸入法並用；`uninstall.sh` 可完整移除
 - 選用的 GNOME Shell extension：頂列圖示與選單、錄音時的畫面提示、滾輪切換小紙條
@@ -64,7 +64,7 @@ cd unseen-voice
   方案 A 用本機 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M`，完全離線，需先 `ollama pull` 這個模型
 - 用本機 Ollama 時，開始錄音就先載入模型；載入後每句約 2～4 秒，用過後模型留在記憶體 30 分鐘（約 3 GB）
 - LLM 沒回應、輸出空白、比原文長太多（像在回答問題）、語言變了，或內容跟口述對不起來，會通知並**改貼原文**
-- 內建五張小紙條：`日常`（預設）、`會議記錄`、`Slack`、`Email`、`翻譯`。小紙條放在
+- 內建五張小紙條：`日常`（預設）、`會議記錄`、`Email`、`社群`（Facebook、Threads 等的貼文）、`翻譯`。小紙條放在
   `~/.config/danwen/prompts/*.yaml`，可自行修改或新增，檔名就是模式名稱
 - `翻譯` 的目標語言另外選：英文（預設）、日文、簡體中文。翻譯結果不會再轉成繁體或套用替換字典，
   日文的「学」「会」、簡體字才不會被改掉。要加語言就在 `翻譯.yaml` 的 `languages` 底下照樣加一段
@@ -104,13 +104,29 @@ log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的�
   | 快捷鍵 | 小紙條 |
   |---|---|
   | Super+Alt+M | 下一張（輪流） |
-  | Super+Alt+1～5 | 日常、會議記錄、Email、Slack、翻譯 |
+  | Super+Alt+1～5 | 日常、會議記錄、Email、社群、翻譯 |
   | Super+Alt+T | 翻譯換下一種語言（不在翻譯時先切到翻譯，語言不變） |
 
   切換時會跳出通知。想用別的按鍵，可在「設定 → 鍵盤 → 檢視及自訂快捷鍵 → 自訂快捷鍵」修改
 
-- 終端機需要 Ctrl+Shift+V，v1 不處理；文字會留在剪貼簿 0.5 秒，可關閉還原功能後手動貼上
 - 貼上後會還原原本的剪貼簿；若這段時間你自己複製了新東西，則不還原
+
+### 依目前的程式調整
+
+有裝 GNOME extension 時，danwen 會知道目前是哪個程式（只有程式代號，不含視窗標題），
+依 `~/.config/danwen/apps.yaml` 調整貼上的按鍵和整理用的小紙條。內建只有一條：
+**終端機**（GNOME Terminal、Console、Tilix、kitty、Alacritty、WezTerm、Konsole 等）貼上改用 **Ctrl+Shift+V**。
+
+- 規則可以自己加，存檔即生效。`paste` 可設 `ctrl+v`、`ctrl+shift+v`、`shift+insert`，
+  或 `none`（只放進剪貼簿，跳通知請你自己貼）；`mode` 讓那個程式整理時自動用某張小紙條，
+  檔案裡有郵件程式自動用 Email 的範例
+- 自動換小紙條只在你目前用的是預設小紙條（日常）時才生效；手動選了別張（例如翻譯）就照你選的。
+  錄音提示會顯示「整理：Email（依目前的程式）」
+- 查某個程式的代號：`danwen apps --delay 3`，在 3 秒內切到那個視窗
+- 沒有 extension 時一律用 Ctrl+V 和你選的小紙條；不想要這個功能可設 `output.app_rules: false`
+- 網頁版的 Gmail、Facebook 等認不出來（對 danwen 來說都是瀏覽器）
+- 不做模擬打字：GNOME Wayland 上，虛擬鍵盤送出的按鍵會先經過注音輸入法，沒有可靠的方法直接打出中文字。
+  貼不進去的程式請設 `paste: none`
 
 ## 方案：本機與雲端
 
@@ -183,9 +199,10 @@ danwen dict remove 肉type
 
 ```bash
 danwen devices            # 列出麥克風與鍵盤
-danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上
+danwen paste-test         # 3 秒後貼一段測試文字，用來確認 gedit／Firefox／VS Code 能貼上（終端機加 --keys ctrl+shift+v）
 danwen mode / refine      # 整理模式的小紙條：列出、切換、測試
 danwen translate          # 翻譯的目標語言：列出、切換
+danwen apps --delay 3     # 依程式調整的規則，以及 3 秒後目前的程式符合哪一條
 danwen shortcuts install  # 設定切換小紙條的 GNOME 快捷鍵（remove 移除、status 查看）
 danwen dict               # 替換字典：列出、新增、刪除
 danwen history            # 歷史紀錄：列出最近 20 次聽寫
@@ -201,7 +218,7 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 
 ```
 聽寫完成 錄音=4.47s ASR=0.118s 後處理=0.002s 整理=0.000s 貼上=0.073s 放開到貼上=0.203s 字數=2 backend=sensevoice
-聽寫完成 錄音=3.28s ASR=0.087s 後處理=0.000s 整理=0.499s 貼上=0.074s 放開到貼上=0.668s 字數=8 backend=sensevoice 小紙條=Slack（雲端 Groq）
+聽寫完成 錄音=3.28s ASR=0.087s 後處理=0.000s 整理=0.499s 貼上=0.074s 放開到貼上=0.668s 字數=8 backend=sensevoice 小紙條=Email（雲端 Groq）
 ```
 
 ## GNOME extension
@@ -220,6 +237,7 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 - 選單：開始／結束／取消長錄音、方案（本機／雲端）、切換小紙條、翻譯成（英文、日文、簡體中文）、
   最近 5 筆（點一下複製）、換小紙條重新整理最新一筆（翻譯展開成各語言，可把同一句翻成好幾種）、
   開啟設定檔／替換字典／小紙條資料夾
+- 告訴 danwen 目前是哪個程式（只有程式代號與視窗類別，不含視窗標題），讓它調整貼法與小紙條
 - 錄音時畫面上方中央的小提示：「● 錄音中 0:03 · 整理：日常」「● 長錄音 1:25 · 再按一下 右 Ctrl 結束，Esc 取消」
   「… 整理中（日常）」；這次錄音或文字會送到雲端時，前面加「☁」
 
@@ -272,11 +290,11 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 |---|---|---|
 | 平台 | Windows、macOS（閉源，隨課程提供） | Ubuntu／GNOME Wayland（開源，MIT） |
 | 語音辨識 | 雲端 Whisper（macOS 26 可用 Apple 本機辨識） | 預設本機 SenseVoice，不用連網；雲端可選 |
-| 小紙條 | 日常、Slack、會議記錄、Email、翻英文，可自訂 | 日常、Slack、會議記錄、Email、翻譯（英文、日文、簡體中文），可自訂 |
+| 小紙條 | 日常、Slack、會議記錄、Email、翻英文，可自訂 | 日常、會議記錄、Email、社群、翻譯（英文、日文、簡體中文），可自訂 |
 | 切換小紙條 | 按住錄音鍵時按 0～9 | 滾輪、Super+Alt+數字、頂列選單 |
 | 長錄音、歷史紀錄、自訂字典 | 有 | 有 |
-| 上下文 | 剪貼簿、選取文字、螢幕內容、目前的 App | 剪貼簿、選取文字（預設關閉，也預設不送雲端） |
-| Word、Outlook 改用模擬打字 | 有 | 還沒有 |
+| 上下文 | 剪貼簿、選取文字、螢幕內容、目前的 App | 剪貼簿、選取文字（預設關閉，也預設不送雲端）；目前的程式只用來選貼法與小紙條，不送給 LLM |
+| 依程式調整 | Word、Outlook 改用模擬打字 | 終端機改送 Ctrl+Shift+V，也可設定特定程式自動換小紙條；模擬打字在 GNOME Wayland 打不出中文，改為只放進剪貼簿 |
 | 語音指令 | 有（預設關閉） | 不做：讓 LLM 執行系統動作，可能被文字裡夾帶的指令誘導 |
 | 設定 | 設定畫面 | 頂列選單＋YAML 設定檔 |
 
@@ -284,8 +302,8 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 
 依實用程度排序：
 
-1. **依目前的 App 調整貼法**：終端機改送 Ctrl+Shift+V，貼不進去的程式改用模擬打字；
-   也可以把目前的 App 當上下文，例如在 Slack 裡自動用 Slack 小紙條
+1. ✅ **依目前的程式調整**：終端機改送 Ctrl+Shift+V，也可設定特定程式自動換小紙條（見「依目前的程式調整」）。
+   模擬打字在 GNOME Wayland 打不出中文，改為 `paste: none`
 2. **歷史搜尋**
 3. **設定畫面**：做成 extension 的設定頁，在「擴充功能」App 裡就能改，不用編 YAML
 4. **字典自動產生規則**：從你改過的整理結果找出常錯的詞，建議加進字典
@@ -328,6 +346,7 @@ dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取
 | `src/danwen/credentials.py` | API Key 存取（GNOME 鑰匙圈） |
 | `src/danwen/data/prompts/` | 內建小紙條 |
 | `src/danwen/output.py` | 剪貼簿與虛擬鍵盤 |
+| `src/danwen/apps.py`、`data/apps.yaml` | 依目前的程式調整貼法與小紙條 |
 | `src/danwen/daemon.py` | 常駐流程與耗時紀錄 |
 | `src/danwen/bench.py` | benchmark |
 

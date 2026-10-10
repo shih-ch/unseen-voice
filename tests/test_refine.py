@@ -107,7 +107,7 @@ def test_terms_are_added_to_system_prompt():
 
 
 def test_all_bundled_prompts_are_valid():
-    for name in ("日常", "會議記錄", "Slack", "Email", "翻譯（英文）", "翻譯（日文）", "翻譯（簡體中文）"):
+    for name in ("日常", "會議記錄", "社群", "Email", "翻譯（英文）", "翻譯（日文）", "翻譯（簡體中文）"):
         p = refine.load_prompt(name)
         assert p.system and p.examples and p.description
         assert "{language}" not in p.system
@@ -142,6 +142,12 @@ def test_cycle_language_enters_translation_first(user_dirs):
     assert refine.cycle_language(1, "日常") == "簡體中文"
     assert refine.cycle_language(1, "日常") == "英文"  # 繞回第一種
     assert refine.cycle_language(-1, "日常") == "簡體中文"
+
+
+def test_deleted_mode_falls_back_to_default(user_dirs):
+    refine.MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    refine.MODE_FILE.write_text("Slack\n", encoding="utf-8")  # 舊版的 Slack 小紙條已改成「社群」
+    assert refine.current_mode("日常") == "日常"
 
 
 def test_legacy_english_mode_means_translate_to_english(user_dirs):

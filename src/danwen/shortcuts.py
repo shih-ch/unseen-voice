@@ -41,7 +41,7 @@ SHORTCUTS = (
     Shortcut("danwen-mode-1", "但聞人語：小紙條 日常", "<Super><Alt>1", ("mode", "日常")),
     Shortcut("danwen-mode-2", "但聞人語：小紙條 會議記錄", "<Super><Alt>2", ("mode", "會議記錄")),
     Shortcut("danwen-mode-3", "但聞人語：小紙條 Email", "<Super><Alt>3", ("mode", "Email")),
-    Shortcut("danwen-mode-4", "但聞人語：小紙條 Slack", "<Super><Alt>4", ("mode", "Slack")),
+    Shortcut("danwen-mode-4", "但聞人語：小紙條 社群", "<Super><Alt>4", ("mode", "社群")),
     Shortcut("danwen-mode-5", "但聞人語：小紙條 翻譯", "<Super><Alt>5", ("mode", "翻譯")),
     Shortcut("danwen-translate-next", "但聞人語：翻譯換下一種語言", "<Super><Alt>t", ("translate", "next")),
 )

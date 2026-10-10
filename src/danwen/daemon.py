@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from . import cloud
+from .apps import DEFAULT_PASTE, AppRules, FocusedApp
 from .asr import ASRUnavailable, create_backend
 from .asr.cloud import CloudASRBackend
 from .audio import Recorder, dbfs
@@ -40,6 +41,7 @@ class Job:
     refine: bool
     kind: str = "fast"
     refine_target: str = "local"  # 錄音開始時就決定：cloud／local／none（雲端不能用且不改用本機：貼原文）
+    mode: str = ""  # 錄音開始時決定的小紙條（可能依目前的程式自動換）；空白＝處理時再讀目前的
 
 
 class Daemon:
@@ -60,6 +62,7 @@ class Daemon:
             cfg.long_recording.max_duration_s if cfg.long_recording.enabled else 0.0,
         )
         self.refiner = Refiner(cfg.refine) if cfg.hotkey.double_tap_ms > 0 else None
+        self.app_rules = AppRules() if cfg.output.app_rules else None
         # 雲端依方案決定；本機的 backend 與 Refiner 一直保留，雲端不能用或失敗時改用本機
         cloud.resolve_plan(cfg.cloud)  # 設定檔的方案名稱有誤時，啟動就報錯
         self._plan_warning = ""
@@ -71,6 +74,8 @@ class Daemon:
         self.dbus = None
         self.state = "idle"  # idle / recording / processing
         self.kind = ""  # fast / refine / long
+        self.recording_mode = ""  # 這次錄音整理用的小紙條（給錄音提示顯示）
+        self.recording_mode_by_app = False
         self._state_lock = threading.Lock()
         self._listener: KeyboardListener | None = None
         self._refining = False
@@ -157,6 +162,9 @@ class Daemon:
                 self.feedback.error(f"無法開啟麥克風：{e}")
                 self._set_state("idle")
                 return
+            # 錄音已經開始才查目前的程式（經 D-Bus，通常幾毫秒），不會漏掉開頭的聲音
+            mode, by_app = self._choose_mode() if self._refining else ("", False)
+            self.recording_mode, self.recording_mode_by_app = mode, by_app
             self._set_state("recording", "long" if long else "refine" if self._refining else "fast")
             self.feedback.start(refine=self._refining, long=long)
             # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
@@ -169,9 +177,10 @@ class Daemon:
             audio = self.recorder.stop()
             self.feedback.stop()
             self._set_state("processing")
-            self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_target))
+            self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_target, self.recording_mode))
         elif action is Action.CANCEL:
             self.recorder.stop()
+            self.recording_mode, self.recording_mode_by_app = "", False
             self._set_state("idle")
             log.info("錄音已取消（組合鍵或 Esc）")
 
@@ -208,6 +217,36 @@ class Daemon:
         if context:
             log.info("上下文：%s", "、".join(f"{k} {len(v)} 字" for k, v in context.items()))
         return context or None
+
+    # ---- 依目前的程式調整 ----
+
+    def _focused_app(self) -> FocusedApp | None:
+        if self.app_rules is None or self.dbus is None:
+            return None
+        return self.dbus.focused_app()
+
+    def _choose_mode(self) -> tuple[str, bool]:
+        """這次整理用的小紙條，回傳（顯示名稱, 是否依程式自動換）。
+        目前用的是預設小紙條、且目前的程式有規則時改用規則的；使用者手動選了別張就照選的。"""
+        selected = current_mode(self.cfg.refine.mode)
+        if selected == self.cfg.refine.mode and self.app_rules is not None:
+            app = self._focused_app()
+            rule = self.app_rules.lookup(app)
+            if rule and rule.mode:
+                try:
+                    label = load_prompt(rule.mode).label
+                except ConfigError as e:
+                    log.warning("程式規則「%s」的小紙條無法使用，改用目前的：%s", rule.name, e)
+                else:
+                    log.info("目前的程式 %s 符合規則「%s」：整理改用小紙條 %s", app, rule.name, label)
+                    return label, True
+        return mode_label(selected), False
+
+    def _paste_keys(self) -> tuple[str, FocusedApp | None]:
+        """貼上用的按鍵：依貼上當下的程式（使用者可能在整理期間換了視窗）。"""
+        app = self._focused_app()
+        rule = self.app_rules.lookup(app) if self.app_rules is not None else None
+        return (rule.paste if rule and rule.paste else DEFAULT_PASTE), app
 
     # ---- 方案（本機／雲端） ----
 
@@ -301,7 +340,8 @@ class Daemon:
         mode = where = ""
         refined_with: str | None = None
         if refine and text:
-            mode = mode_label(current_mode(self.cfg.refine.mode))  # 翻譯時含語言，例如「翻譯（日文）」
+            # 錄音開始時已決定（可能依目前的程式換過）；翻譯時含語言，例如「翻譯（日文）」
+            mode = job.mode or mode_label(current_mode(self.cfg.refine.mode))
             if job.refine_target == "none":
                 where = "未整理：雲端不能用"  # 錄音開始時已通知過原因
             else:
@@ -311,13 +351,18 @@ class Daemon:
                 except (RefineError, ConfigError) as e:
                     self.feedback.notice(f"整理失敗，已貼上原文（{e}）")
         t3 = time.monotonic()
+        keys, app = DEFAULT_PASTE, None
         if text:
-            self.paster.paste(text)
+            keys, app = self._paste_keys()
+            self.paster.paste(text, keys)
+            if keys == "none":
+                self.feedback.notice(f"已放進剪貼簿，請自己貼上（{app} 設定為不自動貼上）")
         t4 = time.monotonic()
         log.info(
-            "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 整理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s%s",
+            "聽寫完成 錄音=%.2fs ASR=%.3fs 後處理=%.3fs 整理=%.3fs 貼上=%.3fs 放開到貼上=%.3fs 字數=%d backend=%s%s%s",
             duration, t1 - t0, t2 - t1, t3 - t2, t4 - t3, t4 - released, len(text), asr_name,
             f" 小紙條={mode}（{where or '失敗'}）" if mode else "",
+            f" 程式={app}" + (f" 貼上={keys}" if keys != DEFAULT_PASTE else "") if app else "",
         )
         if self.cfg.log.log_text:
             log.info("文字：%s", text)

@@ -111,6 +111,9 @@ output:
   # 貼上後還原原本的剪貼簿
   restore_clipboard: true
   restore_delay_ms: 500
+  # 依目前的程式調整（規則在 ~/.config/danwen/apps.yaml）：終端機改送 Ctrl+Shift+V；
+  # 也可以讓特定程式自動換小紙條。需要 GNOME extension 才知道目前的程式
+  app_rules: true
 
 feedback:
   # 開始／結束錄音的提示音

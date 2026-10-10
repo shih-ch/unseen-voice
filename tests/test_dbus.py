@@ -10,7 +10,10 @@ from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError
 
 from danwen.config import ConfigError
-from danwen.dbus_service import INTERFACE, OBJECT_PATH, AlreadyRunning, DBusService
+from dbus_fast.service import ServiceInterface, method
+
+from danwen.apps import FocusedApp
+from danwen.dbus_service import INTERFACE, OBJECT_PATH, SHELL_INTERFACE, SHELL_OBJECT_PATH, AlreadyRunning, DBusService
 
 pytestmark = pytest.mark.skipif(not os.environ.get("DBUS_SESSION_BUS_ADDRESS"), reason="沒有 session bus")
 
@@ -20,6 +23,7 @@ class StubDaemon:
 
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
+        self.recording_mode, self.recording_mode_by_app = "", False
         self.plan = "hybrid"
         self.calls: list[str] = []
 
@@ -171,7 +175,9 @@ def test_state_and_history_signals(service):
         bus.disconnect()
         return changes
 
-    assert asyncio.run(scenario())[0] == {"State": "recording", "Kind": "refine"}
+    assert asyncio.run(scenario())[0] == {
+        "State": "recording", "Kind": "refine", "RecordingMode": "", "RecordingModeByApp": False,
+    }
 
 
 def test_second_instance_is_refused(service):
@@ -198,3 +204,60 @@ def test_overlay_presence_follows_name_owner():
         assert asyncio.run(own_and_check()) is True
     finally:
         svc.stop()
+
+
+class FakeShell(ServiceInterface):
+    """假的 GNOME extension：在 overlay 名稱下提供目前的程式。"""
+
+    def __init__(self, app_id, wm_class):
+        super().__init__(SHELL_INTERFACE)
+        self.app = (app_id, wm_class)
+
+    @method()
+    def FocusedApp(self) -> "ss":  # noqa: F821
+        return list(self.app)
+
+
+def test_focused_app_comes_from_the_extension():
+    name = f"io.github.danwen.Test{os.getpid()}c"
+    overlay = f"io.github.danwen.TestOverlay{os.getpid()}c"
+    svc = DBusService(StubDaemon(), bus_name=name, overlay_name=overlay)
+    svc.start()
+    try:
+        assert svc.focused_app() is None  # 沒有 extension
+
+        async def with_extension(app_id, wm_class):
+            bus = await MessageBus(bus_type=BusType.SESSION).connect()
+            bus.export(SHELL_OBJECT_PATH, FakeShell(app_id, wm_class))
+            await bus.request_name(overlay)
+            app = await asyncio.get_running_loop().run_in_executor(None, svc.focused_app)
+            bus.disconnect()
+            return app
+
+        terminal = asyncio.run(with_extension("org.gnome.Terminal", "gnome-terminal-server"))
+        assert terminal == FocusedApp("org.gnome.Terminal", "gnome-terminal-server")
+        assert asyncio.run(with_extension("", "")) is None  # 沒有焦點視窗（例如在「活動」畫面）
+    finally:
+        svc.stop()
+
+
+def test_recording_mode_is_sent_with_state(service):
+    name, daemon, svc = service
+
+    async def scenario():
+        bus, iface, props = await connect(name)
+        changes = []
+        props.on_properties_changed(lambda _i, changed, _inv: changes.append({k: v.value for k, v in changed.items()}))
+        await asyncio.sleep(0.1)
+        daemon.state, daemon.kind = "recording", "refine"
+        daemon.recording_mode, daemon.recording_mode_by_app = "Email", True
+        svc.notify_state()
+        for _ in range(20):
+            if changes:
+                break
+            await asyncio.sleep(0.05)
+        assert await iface.get_recording_mode() == "Email" and await iface.get_recording_mode_by_app() is True
+        bus.disconnect()
+        return changes
+
+    assert asyncio.run(scenario())[0]["RecordingMode"] == "Email"

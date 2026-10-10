@@ -27,6 +27,7 @@ class FakeDaemon:
     def __init__(self):
         self.state, self.kind, self.mode = "idle", "", "日常"
         self.language = "英文"
+        self.recording_mode, self.recording_mode_by_app = "", False
         self.plan = "hybrid"
         self._refused_once = False
         self.manual = threading.Event()  # 由選單控制錄音時停止自動切換

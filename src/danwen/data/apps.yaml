@@ -1,0 +1,37 @@
+# 但聞人語：依目前的程式調整貼上方式，以及整理模式用哪張小紙條
+#
+# 需要 GNOME extension（danwen 透過它知道目前的程式；extension 只回報程式代號，不回報視窗標題）。
+# 沒有 extension 時一律用 Ctrl+V 和你選的小紙條。存檔即生效，不必重新啟動。
+#
+# 由上往下比對，用第一條符合的規則：
+#   match：程式代號或視窗類別，不分大小寫。查目前程式的代號：danwen apps --delay 3（3 秒內切到那個視窗）
+#   paste：ctrl+v（預設）、ctrl+shift+v（終端機）、shift+insert，或 none（只放進剪貼簿，自己貼）
+#   mode：整理模式改用的小紙條（例如 Email、社群、翻譯（英文））。
+#         只在你目前用的是預設小紙條時才換；你手動選了別張，就照你選的
+rules:
+  - name: 終端機
+    match:
+      - org.gnome.Terminal
+      - gnome-terminal-server
+      - org.gnome.Console
+      - kgx
+      - org.gnome.Ptyxis
+      - com.gexperts.Tilix
+      - kitty
+      - Alacritty
+      - org.wezfurlong.wezterm
+      - foot
+      - footclient
+      - org.kde.konsole
+      - konsole
+      - terminator
+      - guake
+      - tilda
+      - com.raggesilver.BlackBox
+      - com.mitchellh.ghostty
+    paste: ctrl+shift+v
+
+  # 範例：在郵件程式裡整理時自動用 Email 小紙條（要用就把前面的 # 拿掉）
+  # - name: 郵件
+  #   match: [org.mozilla.Thunderbird, thunderbird, org.gnome.Evolution, org.gnome.Geary]
+  #   mode: Email

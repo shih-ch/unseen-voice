@@ -38,6 +38,21 @@ function dump(menu, indent = '') {
     }
 }
 
+// 經 D-Bus 呼叫 extension 的 FocusedApp（跟 danwen 查詢的方式一樣）
+function focusedApp() {
+    return new Promise((resolve, reject) => {
+        Gio.DBus.session.call('io.github.danwen.ShellOverlay', '/io/github/danwen/Shell',
+            'io.github.danwen.Shell1', 'FocusedApp', null, null, Gio.DBusCallFlags.NONE, 2000, null,
+            (connection, result) => {
+                try {
+                    resolve(connection.call_finish(result).deepUnpack());
+                } catch (e) {
+                    reject(e);
+                }
+            });
+    });
+}
+
 async function openAndDump(indicator, title) {
     indicator.menu.open();
     await wait(1500); // 等選單向 danwen 讀取清單
@@ -91,10 +106,13 @@ async function screenshots(indicator) {
     await indicator._call('CancelAsync');
     await wait(800);
 
-    await indicator._call('SetModeAsync', '會議記錄');
+    // 從「翻譯」的上一張往下滾一格，畫面顯示「翻譯（日文）」
+    const [modes] = await indicator._proxy.ListModesAsync();
+    const names = modes.map(([name]) => name);
+    await indicator._call('SetModeAsync', names[(names.indexOf('翻譯') - 1 + names.length) % names.length]);
     await wait(500);
     indicator._lastCycle = 0;
-    await indicator._cycleMode(1); // 會議記錄的下一張：翻譯（日文）
+    await indicator._cycleMode(1);
     await wait(600);
     const osd = Main.osdWindowManager._osdWindows.find(w => w.visible);
     await shot('osd-switch', [osd], {pad: 40, fromTop: false});
@@ -132,6 +150,16 @@ async function run() {
     out('換小紙條重新整理（翻譯（簡體中文））完成');
 
     await openAndDump(indicator, '操作後');
+
+    Main.overview.hide();
+    await wait(800);
+    out('目前的程式（沒有視窗）：', JSON.stringify(await focusedApp()));
+    // 測試環境沒有桌面服務（portal），不關掉的話 GTK 程式要等很久才開出視窗
+    GLib.spawn_command_line_async('env GDK_DEBUG=no-portals GTK_USE_PORTAL=0 gnome-calculator');
+    for (let i = 0; i < 40 && !global.display.focus_window; i++)
+        await wait(500);
+    await wait(500);
+    out('目前的程式（開了計算機）：', JSON.stringify(await focusedApp()));
 }
 
 export default class ProbeExtension extends Extension {

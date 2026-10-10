@@ -156,9 +156,11 @@ class LocalBackend:
 class StubPaster:
     def __init__(self):
         self.pasted = []
+        self.keys = []
 
-    def paste(self, text):
+    def paste(self, text, keys="ctrl+v"):
         self.pasted.append(text)
+        self.keys.append(keys)
 
     def close(self):
         pass

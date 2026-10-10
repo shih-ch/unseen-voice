@@ -16,6 +16,7 @@ STATE_DIR = _xdg("XDG_STATE_HOME", ".local/state") / "danwen"
 
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 REPLACEMENTS_FILE = CONFIG_DIR / "replacements.yaml"
+APPS_FILE = CONFIG_DIR / "apps.yaml"
 MODELS_DIR = CACHE_DIR / "models"
 SOUNDS_DIR = CACHE_DIR / "sounds"
 LOG_FILE = STATE_DIR / "danwen.log"

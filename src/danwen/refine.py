@@ -187,7 +187,9 @@ def current_mode(default: str) -> str:
         name = MODE_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return default
-    return split_mode(name or default)[0]  # 舊版記錄的「英文」＝翻譯
+    base = split_mode(name or default)[0]  # 舊版記錄的「英文」＝翻譯
+    # 記錄的小紙條已被刪除或改名（例如舊版的 Slack）時，退回預設的
+    return base if base in available_prompts() else default
 
 
 def mode_label(name: str) -> str:

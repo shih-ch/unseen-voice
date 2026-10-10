@@ -7,6 +7,7 @@ import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -19,6 +20,17 @@ const BUS_NAME = 'io.github.danwen';
 // 持有這個名稱表示畫面上會顯示錄音提示，danwen 就不再另外跳系統通知
 const OVERLAY_BUS_NAME = 'io.github.danwen.ShellOverlay';
 const OBJECT_PATH = '/io/github/danwen';
+// 在 OVERLAY_BUS_NAME 下提供目前的程式給 danwen（決定貼上用的按鍵、要不要換小紙條）。
+// 只回報程式代號與視窗類別，不回報視窗標題；danwen 只在開始整理錄音與貼上時查詢
+const SHELL_OBJECT_PATH = '/io/github/danwen/Shell';
+const SHELL_IFACE_XML = `
+<node>
+  <interface name="io.github.danwen.Shell1">
+    <method name="FocusedApp">
+      <arg type="s" name="app_id" direction="out"/><arg type="s" name="wm_class" direction="out"/>
+    </method>
+  </interface>
+</node>`;
 const IFACE_XML = `
 <node>
   <interface name="io.github.danwen.Daemon1">
@@ -27,6 +39,8 @@ const IFACE_XML = `
     <property name="Mode" type="s" access="read"/>
     <property name="ModeLabel" type="s" access="read"/>
     <property name="Language" type="s" access="read"/>
+    <property name="RecordingMode" type="s" access="read"/>
+    <property name="RecordingModeByApp" type="b" access="read"/>
     <property name="Hotkey" type="s" access="read"/>
     <property name="Plan" type="s" access="read"/>
     <property name="PlanTitle" type="s" access="read"/>
@@ -117,9 +131,10 @@ class DanwenOsd extends St.BoxLayout {
         Main.layoutManager.uiGroup.add_child(this);
     }
 
-    update(state, kind, mode, hotkey, cloud) {
+    update(state, kind, mode, hotkey, cloud, byApp = false) {
         this._hotkey = hotkey;
         this._cloud = cloud;
+        this._byApp = byApp;
         if (state === 'recording' && this._state !== 'recording')
             this._since = GLib.get_monotonic_time();
         this._state = state;
@@ -158,7 +173,7 @@ class DanwenOsd extends St.BoxLayout {
         else if (this._kind === 'long')
             this._label.text = `${where}長錄音 ${elapsed}　·　再按一下 ${keyName(this._hotkey)} 結束，Esc 取消`;
         else if (this._kind === 'refine')
-            this._label.text = `${where}錄音中 ${elapsed}　·　整理：${this._mode}`;
+            this._label.text = `${where}錄音中 ${elapsed}　·　整理：${this._mode}${this._byApp ? '（依目前的程式）' : ''}`;
         else
             this._label.text = `${where}錄音中 ${elapsed}`;
         this._position();
@@ -231,6 +246,8 @@ class DanwenIndicator extends PanelMenu.Button {
         this._osd = new DanwenOsd();
         this._overlayNameId = Gio.bus_own_name(Gio.BusType.SESSION, OVERLAY_BUS_NAME,
             Gio.BusNameOwnerFlags.NONE, null, null, null);
+        this._shellIface = Gio.DBusExportedObject.wrapJSObject(SHELL_IFACE_XML, this);
+        this._shellIface.export(Gio.DBus.session, SHELL_OBJECT_PATH);
 
         // GNOME 不會打開空的選單，所以骨架一開始就建好；清單在打開時才向 danwen 讀取
         this._buildMenu();
@@ -327,8 +344,10 @@ class DanwenIndicator extends PanelMenu.Button {
         if (running) {
             // 只有這次錄音真的會送資料出去時才標 ☁：雲端辨識，或整理模式且整理走雲端
             const {Kind: kind, CloudAsr: asr, CloudRefine: refine} = this._proxy;
-            this._osd.update(this._proxy.State, kind, this._proxy.ModeLabel || this._proxy.Mode, this._proxy.Hotkey,
-                Boolean(asr || (kind === 'refine' && refine)));
+            // 這次錄音實際用的小紙條（可能依目前的程式自動換過）；舊版 danwen 沒有時用目前選的
+            const mode = this._proxy.RecordingMode || this._proxy.ModeLabel || this._proxy.Mode;
+            this._osd.update(this._proxy.State, kind, mode, this._proxy.Hotkey,
+                Boolean(asr || (kind === 'refine' && refine)), Boolean(this._proxy.RecordingModeByApp));
         } else {
             this._osd.update('offline', '', '', '', false);
         }
@@ -511,6 +530,17 @@ class DanwenIndicator extends PanelMenu.Button {
             Main.notify(APP_NAME, `已用「${mode}」重新整理，結果已複製到剪貼簿`, preview(result[0]));
     }
 
+    // D-Bus：io.github.danwen.Shell1.FocusedApp
+    FocusedApp() {
+        const win = global.display.focus_window;
+        if (!win)
+            return ['', ''];
+        const app = Shell.WindowTracker.get_default().get_window_app(win);
+        const appId = (app?.get_id() ?? '').replace(/\.desktop$/, '');
+        // 沒有 .desktop 的視窗，WindowTracker 會給「window:123」這種臨時代號，沒有意義
+        return [appId.startsWith('window:') ? '' : appId, win.get_wm_class() ?? ''];
+    }
+
     _addItem(menu, text, callback) {
         const item = new PopupMenu.PopupMenuItem(text);
         item.connect('activate', () => callback());
@@ -540,6 +570,7 @@ class DanwenIndicator extends PanelMenu.Button {
 
     destroy() {
         this._cancellable.cancel();
+        this._shellIface.unexport();
         Gio.bus_unown_name(this._overlayNameId);
         this._osd.destroy();
         this._osd = null;

@@ -1,4 +1,4 @@
-"""命令列入口：danwen run | bench | download | devices | paste-test | mode | translate | refine | dict | history | cloud | key | shortcuts | init-config"""
+"""命令列入口：danwen run | bench | download | devices | paste-test | mode | translate | refine | dict | history | apps | cloud | key | shortcuts | init-config"""
 
 from __future__ import annotations
 
@@ -108,8 +108,8 @@ def cmd_paste_test(args: argparse.Namespace, cfg: config.Config) -> int:
         for i in range(args.delay, 0, -1):
             print(f"{i} 秒後貼上，請點一下要測試的輸入框……", flush=True)
             time.sleep(1)
-        paster.paste(args.text)
-        print("已送出 Ctrl+V")
+        paster.paste(args.text, args.keys)
+        print(f"已送出 {args.keys}")
         time.sleep(cfg.output.restore_delay_ms / 1000 + 0.3)  # 等剪貼簿還原完成
     finally:
         paster.close()
@@ -327,6 +327,51 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+async def _query_focused_app():
+    import asyncio
+
+    from dbus_fast import BusType
+    from dbus_fast.aio import MessageBus
+
+    from .dbus_service import call_focused_app
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SESSION).connect()
+    except Exception:
+        return None
+    try:
+        return await asyncio.wait_for(call_focused_app(bus), 2)
+    except Exception:
+        return None
+    finally:
+        bus.disconnect()
+
+
+def cmd_apps(args: argparse.Namespace, cfg: config.Config) -> int:
+    import asyncio
+    import time
+
+    from .apps import AppRules
+
+    rules = AppRules()
+    note = "" if cfg.output.app_rules else "（設定檔的 output.app_rules 為 false，目前沒有套用）"
+    print(f"程式規則：{rules.path}{note}")
+    for r in rules.rules():
+        does = "、".join(x for x in (f"貼上用 {r.paste}" if r.paste else "", f"整理改用小紙條 {r.mode}" if r.mode else "") if x)
+        print(f"  {r.name}：{does or '（沒有設定）'}　［{'、'.join(r.match)}］")
+    for i in range(args.delay, 0, -1):
+        print(f"{i} 秒後讀取目前的程式，請切換到要查的視窗……", flush=True)
+        time.sleep(1)
+    app = asyncio.run(_query_focused_app())
+    if app is None:
+        print("\n讀不到目前的程式：需要新版的 GNOME extension（./install.sh --with-extension，裝好後登出再登入）")
+        return 0
+    rule = rules.lookup(app)
+    print(f"\n目前的程式：{app.app_id or '（沒有代號）'}（視窗類別：{app.wm_class or '（沒有）'}）")
+    print(f"  → 符合規則「{rule.name}」" if rule else "  → 沒有符合的規則：貼上用 Ctrl+V，整理用你選的小紙條")
+    return 0
+
+
 def cmd_key(args: argparse.Namespace, cfg: config.Config) -> int:
     import getpass
 
@@ -470,12 +515,13 @@ def cmd_shortcuts(args: argparse.Namespace, cfg: config.Config) -> int:
 # 已改名或合併的內建小紙條：使用者的複本沒改過（雜湊相同）才刪除
 _RETIRED_PROMPTS = {
     "英文.yaml": ("7065bfa1cbd95e057ea07312707cb0d8d44bcf9bbfaa5447019906041bc8a887", "翻譯（英文）"),
+    "Slack.yaml": ("17fbc5096daa1dbe75a8e1f150b06541a3d441cd2a3bffd96a99077d55d93186", "社群"),
 }
 
 
 def cmd_init_config(args: argparse.Namespace, cfg: config.Config) -> int:
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml")]
+    targets = [(paths.DATA_DIR / n, paths.CONFIG_DIR / n) for n in ("config.yaml", "replacements.yaml", "apps.yaml")]
     targets += [(f, paths.CONFIG_DIR / "prompts" / f.name) for f in sorted((paths.DATA_DIR / "prompts").glob("*.yaml"))]
     for name, (digest, replaced_by) in _RETIRED_PROMPTS.items():
         old = paths.CONFIG_DIR / "prompts" / name
@@ -514,6 +560,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("paste-test", help="倒數後把一段文字貼到目前的輸入框，測試貼上流程")
     p.add_argument("text", nargs="?", default="但聞人語測試：把這個PR merge到main，台灣繁體中文。")
     p.add_argument("--delay", type=int, default=3, help="倒數秒數（預設 3）")
+    p.add_argument("--keys", choices=("ctrl+v", "ctrl+shift+v", "shift+insert"), default="ctrl+v",
+                   help="貼上用的按鍵（終端機用 ctrl+shift+v）")
     p = sub.add_parser("mode", help="列出或切換整理模式的小紙條")
     p.add_argument("name", nargs="?", help="要切換到的小紙條名稱（翻譯可寫「翻譯（日文）」或「日文」）；next／prev＝下一張／上一張")
     p = sub.add_parser("translate", help="列出或切換「翻譯」小紙條的目標語言（會一併切到翻譯）")
@@ -531,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
     p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
     p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式；翻譯可寫「日文」）")
+    p = sub.add_parser("apps", help="依目前的程式調整貼法與小紙條：列出規則、查目前的程式")
+    p.add_argument("--delay", type=int, default=0, help="幾秒後再讀取目前的程式（讓你先切到要查的視窗）")
     p = sub.add_parser("cloud", help="方案（本機／雲端）：查看、切換、實測連線")
     p.add_argument("action", nargs="?", default="status",
                    help="status、test、on（預設方案）、off（全部本機），或方案名稱／代號：local/A、hybrid/B、groq/C、cloudflare/D、custom/E")
@@ -562,6 +612,7 @@ def main(argv: list[str] | None = None) -> int:
         "refine": cmd_refine,
         "dict": cmd_dict,
         "history": cmd_history,
+        "apps": cmd_apps,
         "cloud": cmd_cloud,
         "key": cmd_key,
         "shortcuts": cmd_shortcuts,

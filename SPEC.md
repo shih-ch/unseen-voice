@@ -87,7 +87,7 @@
 - 不做：語音指令（ZeroType 有，但讓 LLM 執行系統動作有 prompt injection 風險）
 
 ## 路線圖（對照保哥 ZeroType 的差距，依序進行）
-1. ✅ 字典帶進整理：替換字典裡的正確寫法交給 LLM 參考；`danwen dict` 新增／列出詞條；新增 Slack、Email 小紙條
+1. ✅ 字典帶進整理：替換字典裡的正確寫法交給 LLM 參考；`danwen dict` 新增／列出詞條；新增 Slack、Email 小紙條（Slack 於 2026-10-10 改為「社群」：使用者不用 Slack）
 2. ✅ 歷史紀錄：最近 20 筆文字（錄音預設不存），`danwen history` 列出／查看／複製／重聽，
    `redo` 不必重錄即可換小紙條重新整理；資料為 `~/.local/state/danwen/history/history.json`（0600），
    D-Bus 介面延到第 5 步與 extension 一起做（屆時才有使用者可測試）
@@ -161,7 +161,7 @@
   以 GNOME 內建的浮動提示（Main.osdWindowManager）顯示目前小紙條
 - `danwen mode next／prev`；D-Bus `CycleMode(step)`
 - `danwen shortcuts install／remove／status`：新增 GNOME 自訂快捷鍵 Super+Alt+M（下一張）、Super+Alt+1～5
-  （日常、會議記錄、Email、Slack、翻譯）、Super+Alt+T（翻譯換下一種語言）；路徑以 danwen- 開頭，只動自己的項目；
+  （日常、會議記錄、Email、社群、翻譯）、Super+Alt+T（翻譯換下一種語言）；路徑以 danwen- 開頭，只動自己的項目；
   安裝前檢查 GNOME 內建與既有自訂快捷鍵，佔用的略過；uninstall.sh 以專案程式（只用標準函式庫）移除
 - 不做：按住錄音鍵＋數字（danwen 攔不住按鍵，數字會同時送進程式）、由 install.sh 自動建立 GNOME 快捷鍵（改為使用者明確執行 danwen shortcuts install）
 
@@ -183,7 +183,7 @@
 對照保哥 ZeroType（[課程頁](https://zerotype.gh.miniasp.com/)、
 [使用者心得](https://www.opasschang.com/blog/i-paid-2800-for-voice-input-class-then-forked-instead)）。
 
-已有：按住說話、長錄音、雲端 Whisper（可選，預設本機）、小紙條（日常／Slack／會議記錄／Email／翻譯，可自訂）、
+已有：按住說話、長錄音、雲端 Whisper（可選，預設本機）、小紙條（日常／會議記錄／Email／社群／翻譯，可自訂）、
 刪贅詞與補標點、台灣繁體、自訂字典、貼上後還原剪貼簿、歷史 20 筆（複製／重聽／換小紙條重新整理）、
 上下文（剪貼簿、選取文字）、自選服務商。
 
@@ -195,9 +195,20 @@
 刻意不做：語音指令（讓 LLM 執行系統動作有 prompt injection 風險）
 
 還沒做的（依實用程度排序，括號為工作量）：
-1. 依目前的 App 調整貼法（中）：extension 透過 D-Bus 提供焦點視窗的程式（wm_class），
-   終端機改送 Ctrl+Shift+V、貼不進去的程式改用模擬打字；也可把目前的 App 當上下文
-   （例如在 Slack 裡自動用 Slack 小紙條）。ZeroType 對 Word、Outlook 用模擬打字
+1. ✅ 依目前的程式調整（2026-10-10）：
+   - extension 在 `io.github.danwen.ShellOverlay` 下匯出 `/io/github/danwen/Shell`（`io.github.danwen.Shell1.FocusedApp`
+     → 程式代號、視窗類別），不含視窗標題；danwen 只在開始整理錄音與貼上時查詢（逾時 0.25 秒，沒有 extension 就用預設）
+   - 規則檔 `~/.config/danwen/apps.yaml`（沒有時用內建，init-config 會複製；存檔即生效；格式錯誤時當作沒有規則）：
+     match 比對程式代號或視窗類別（不分大小寫），第一條符合的規則生效；paste（ctrl+v／ctrl+shift+v／shift+insert／none）、
+     mode（小紙條）。內建只有終端機 Ctrl+Shift+V（使用者用網頁版收信、不用 Slack），郵件程式→Email 留作註解範例
+   - 小紙條在錄音開始時決定，只在目前是預設小紙條（refine.mode）時才依程式換，使用者手動選的優先；
+     D-Bus 屬性 RecordingMode、RecordingModeByApp 讓錄音提示顯示「整理：Email（依目前的程式）」
+   - 貼上的按鍵在貼上當下決定（整理期間可能換了視窗）；虛擬鍵盤依序按下、反序放開，跟手按一樣：
+     fcitx5 的 Control+Shift_L／R 切換輸入法只在中間沒按其他鍵時觸發，所以 Ctrl+Shift+V 不會切換
+   - 不做模擬打字：uinput 只能送按鍵代碼，按鍵會經過注音輸入法；GNOME 沒有提供 virtual-keyboard 協定，
+     遠端桌面 portal 送 keysym 也不保證打得出中文。貼不進去的程式改用 paste: none（只放剪貼簿並通知）
+   - `danwen apps [--delay N]` 列出規則與目前的程式；`danwen paste-test --keys`；設定 `output.app_rules` 可關閉
+   - 目前的程式不送給 LLM（只用來選貼法與小紙條）
 2. 歷史搜尋（小）：`danwen history search`，選單也可加
 3. 設定畫面（中～大）：extension 的設定頁（prefs.js），在「擴充功能」App 裡就能改
 4. 字典自動產生規則（中）：例如從使用者改過的整理結果找出常錯的詞，建議加進字典

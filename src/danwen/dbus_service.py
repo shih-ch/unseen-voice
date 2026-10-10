@@ -24,10 +24,26 @@ INTERFACE = "io.github.danwen.Daemon1"
 ERROR = "io.github.danwen.Error"
 # GNOME extension 啟用時持有這個名稱，表示畫面上會顯示錄音提示（danwen 就不必再跳系統通知）
 OVERLAY_BUS_NAME = "io.github.danwen.ShellOverlay"
+# extension 在同一個名稱下提供目前的程式（只有程式代號與視窗類別，沒有視窗標題）
+SHELL_OBJECT_PATH = "/io/github/danwen/Shell"
+SHELL_INTERFACE = "io.github.danwen.Shell1"
 
 
 class AlreadyRunning(RuntimeError):
     pass
+
+
+async def call_focused_app(bus: MessageBus, name: str = OVERLAY_BUS_NAME):
+    """向 GNOME extension 查詢目前的程式；沒有 extension 或查不到時回傳 None。"""
+    from .apps import FocusedApp
+
+    reply = await bus.call(
+        Message(destination=name, path=SHELL_OBJECT_PATH, interface=SHELL_INTERFACE, member="FocusedApp")
+    )
+    if reply.message_type != MessageType.METHOD_RETURN or len(reply.body) != 2:
+        return None
+    app = FocusedApp(str(reply.body[0]), str(reply.body[1]))
+    return app if app.app_id or app.wm_class else None
 
 
 class _Interface(ServiceInterface):
@@ -61,6 +77,14 @@ class _Interface(ServiceInterface):
     @dbus_property(access=PropertyAccess.READ)
     def Language(self) -> "s":  # 翻譯的目標語言；沒有「翻譯」小紙條時為空字串
         return self._daemon.mode_properties()["Language"]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def RecordingMode(self) -> "s":  # 這次錄音整理用的小紙條（顯示用）；快速模式為空字串
+        return self._daemon.recording_mode
+
+    @dbus_property(access=PropertyAccess.READ)
+    def RecordingModeByApp(self) -> "b":  # 這次的小紙條是依目前的程式自動換的
+        return self._daemon.recording_mode_by_app
 
     @dbus_property(access=PropertyAccess.READ)
     def Hotkey(self) -> "s":  # evdev 按鍵名稱，例如 KEY_RIGHTCTRL
@@ -205,7 +229,11 @@ class DBusService:
 
     def notify_state(self) -> None:
         if self._iface is not None:
-            changed = {"State": self._daemon.state, "Kind": self._daemon.kind}
+            changed = {
+                "State": self._daemon.state, "Kind": self._daemon.kind,
+                "RecordingMode": self._daemon.recording_mode,
+                "RecordingModeByApp": self._daemon.recording_mode_by_app,
+            }
             self._soon(self._iface.emit_properties_changed, changed)
 
     def notify_properties(self, changed: dict) -> None:
@@ -225,6 +253,17 @@ class DBusService:
             return future.result(timeout)
         except Exception:
             return False
+
+    def focused_app(self, timeout: float = 0.25):
+        """目前的程式（由 GNOME extension 提供）；沒有 extension 或逾時時回傳 None。可從任何執行緒呼叫。"""
+        if self._loop is None or self._bus is None or not self._loop.is_running():
+            return None
+        future = asyncio.run_coroutine_threadsafe(call_focused_app(self._bus, self._overlay_name), self._loop)
+        try:
+            return future.result(timeout)
+        except Exception:
+            future.cancel()
+            return None
 
     async def _name_has_owner(self, name: str) -> bool:
         reply = await self._bus.call(

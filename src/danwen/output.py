@@ -1,4 +1,4 @@
-"""輸出：備份剪貼簿 → 寫入結果 → 虛擬鍵盤送 Ctrl+V → 稍後還原剪貼簿。
+"""輸出：備份剪貼簿 → 寫入結果 → 虛擬鍵盤送 Ctrl+V（終端機等依規則改用其他按鍵）→ 稍後還原剪貼簿。
 
 剪貼簿走 XWayland（xclip）而不是 wl-clipboard：GNOME 沒有提供背景程式存取剪貼簿的
 Wayland 協定，wl-copy／wl-paste 每次都要開一個小視窗搶鍵盤焦點，會讓目標輸入框
@@ -82,26 +82,40 @@ class Clipboard:
             cls._write(saved.data, saved.target)
 
 
+# 貼上用的按鍵組合 → evdev 按鍵名稱（依序按下，反序放開，跟手按的順序一樣：
+# fcitx5 的 Ctrl+Shift 切換輸入法只在中間沒按其他鍵時才觸發，所以 Ctrl+Shift+V 不會切換）
+_KEY_NAMES = {"ctrl": "KEY_LEFTCTRL", "shift": "KEY_LEFTSHIFT", "v": "KEY_V", "insert": "KEY_INSERT"}
+
+
+def key_names(keys: str) -> list[str]:
+    """「ctrl+shift+v」→ ["KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V"]。"""
+    try:
+        return [_KEY_NAMES[k] for k in keys.lower().split("+")]
+    except KeyError as e:
+        raise ValueError(f"不支援的貼上按鍵：{keys}") from e
+
+
 class VirtualKeyboard:
-    """uinput 虛擬鍵盤，只會按 Ctrl+V。啟動時建立並常駐，讓 GNOME 先認得這個裝置。"""
+    """uinput 虛擬鍵盤，只會按貼上用的幾個鍵。啟動時建立並常駐，讓 GNOME 先認得這個裝置。"""
 
     def __init__(self):
         from evdev import UInput, ecodes
 
         self._e = ecodes
-        self._ui = UInput({ecodes.EV_KEY: [ecodes.KEY_LEFTCTRL, ecodes.KEY_V]}, name=VKBD_NAME)
+        codes = [getattr(ecodes, name) for name in _KEY_NAMES.values()]
+        self._ui = UInput({ecodes.EV_KEY: codes}, name=VKBD_NAME)
 
     def _key(self, code: int, value: int) -> None:
         self._ui.write(self._e.EV_KEY, code, value)
         self._ui.syn()
         time.sleep(0.008)
 
-    def ctrl_v(self) -> None:
-        e = self._e
-        self._key(e.KEY_LEFTCTRL, 1)
-        self._key(e.KEY_V, 1)
-        self._key(e.KEY_V, 0)
-        self._key(e.KEY_LEFTCTRL, 0)
+    def press(self, keys: str) -> None:
+        codes = [getattr(self._e, name) for name in key_names(keys)]
+        for code in codes:
+            self._key(code, 1)
+        for code in reversed(codes):
+            self._key(code, 0)
 
     def close(self) -> None:
         self._ui.close()
@@ -113,11 +127,15 @@ class Paster:
         self.restore_delay_s = restore_delay_ms / 1000
         self._keyboard = VirtualKeyboard()
 
-    def paste(self, text: str) -> None:
+    def paste(self, text: str, keys: str = "ctrl+v") -> None:
+        """keys：貼上用的按鍵（ctrl+v、ctrl+shift+v、shift+insert）；none＝只放進剪貼簿，不貼也不還原。"""
+        if keys == "none":
+            Clipboard.set_text(text)
+            return
         saved = Clipboard.save() if self.restore_clipboard else None
         Clipboard.set_text(text)
         time.sleep(_SYNC_DELAY_S)
-        self._keyboard.ctrl_v()
+        self._keyboard.press(keys)
         if self.restore_clipboard:
             timer = threading.Timer(self.restore_delay_s, self._restore, (saved, text))
             timer.daemon = True

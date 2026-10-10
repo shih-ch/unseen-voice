@@ -105,6 +105,7 @@ class CloudConfig:
 class OutputConfig:
     restore_clipboard: bool = True
     restore_delay_ms: int = 500
+    app_rules: bool = True
 
 
 @dataclass

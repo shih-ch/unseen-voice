@@ -26,6 +26,7 @@ def isolate_user_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CONFIG_DIR", tmp_path / "isolated" / "config")
     monkeypatch.setattr(paths, "CONFIG_FILE", tmp_path / "isolated" / "config" / "config.yaml")
     monkeypatch.setattr(paths, "REPLACEMENTS_FILE", tmp_path / "isolated" / "config" / "replacements.yaml")
+    monkeypatch.setattr(paths, "APPS_FILE", tmp_path / "isolated" / "config" / "apps.yaml")
     monkeypatch.setattr(refine, "USER_PROMPTS_DIR", tmp_path / "isolated" / "config" / "prompts")
 
     real_post = httpclient.post
