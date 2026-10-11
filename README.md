@@ -153,7 +153,37 @@ log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的�
 
 ## 方案：本機與雲端
 
-用「方案」決定哪些部分走雲端（走雲端的錄音或文字會送出電腦）：
+用「方案」決定哪些部分走雲端（走雲端的錄音或文字會送出電腦）。綠色在這台電腦上做，橘色要連網：
+
+```mermaid
+flowchart TD
+    rec["按住右 Ctrl 說話<br/>錄音（藍牙自動切免持）"]:::neutral
+    vad["語音偵測 Silero VAD<br/>沒說話就不送辨識"]:::local
+    sv["SenseVoice Small<br/>方案 A、B・sherpa-onnx CPU"]:::local
+    wh["whisper-large-v3-turbo<br/>方案 C Groq・D Cloudflare"]:::cloud
+    post["轉台灣繁體＋替換字典<br/>OpenCC s2twp・一律本機"]:::local
+    subgraph refine["整理模式：小紙條＋LLM"]
+        ollama["Ollama qwen3:4b<br/>方案 A"]:::local
+        groq["Groq qwen3.8-27b<br/>方案 B（預設）、C"]:::cloud
+        cf["Cloudflare llama-3.3-70b<br/>方案 D"]:::cloud
+    end
+    paste["貼到目前的程式<br/>剪貼簿＋模擬 Ctrl+V"]:::neutral
+
+    rec --> vad
+    vad --> sv & wh
+    sv & wh --> post
+    post --> refine
+    post -. 一般聽寫直接貼上 .-> paste
+    refine --> paste
+
+    classDef local fill:#E1F5EE,stroke:#0F6E56,color:#085041
+    classDef cloud fill:#FAECE7,stroke:#993C1D,color:#712B13
+    classDef neutral fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    style refine fill:none,stroke-dasharray:5 5
+```
+
+整理模式（短按一下右 Ctrl 再按住）的結果會再過一次轉繁體與替換字典（翻譯除外）。雲端辨識失敗時改用本機 SenseVoice（一直載入著）；
+剪貼簿等上下文與字典的專有名詞預設都不送雲端。
 
 | 方案 | 語音辨識 | 整理模式 | 費用（個人用量） |
 |---|---|---|---|
