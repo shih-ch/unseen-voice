@@ -84,6 +84,9 @@ refine:
   context_max_chars: 1000
   # base_url 不是本機時，預設不送出上下文；要送到雲端服務請明確改成 true
   context_to_cloud: false
+  # 替換字典裡的正確寫法（專有名詞）也當提示交給雲端的 LLM 與雲端辨識；預設只給本機 Ollama。
+  # 替換本身一律在本機做，關閉時聽錯的詞照樣會被改對，只是雲端看不到這份提示
+  terms_to_cloud: false
 
 cloud:
   # 方案：哪些部分走雲端（走雲端的錄音或文字會送出電腦）

@@ -258,6 +258,14 @@ class SettingsWindow {
             '關閉時只在用本機 Ollama 時才附上；開啟後剪貼簿內容會送到雲端'));
         page.add(context);
 
+        const terms = new Adw.PreferencesGroup({
+            title: '字典',
+            description: '替換一律在這台電腦上做；這裡只決定字典的正確寫法（專有名詞）要不要當提示交給雲端。',
+        });
+        terms.add(this._switch('refine.terms_to_cloud', '字典的專有名詞也送到雲端',
+            '關閉時只提示本機 Ollama；開啟後雲端的 LLM 與雲端辨識也看得到，專有名詞比較容易寫對'));
+        page.add(terms);
+
         const apps = new Adw.PreferencesGroup({title: '依目前的程式調整'});
         apps.add(this._switch('output.app_rules', '依目前的程式調整',
             '例如終端機改用 Ctrl+Shift+V 貼上；也可以讓特定程式自動換小紙條'));

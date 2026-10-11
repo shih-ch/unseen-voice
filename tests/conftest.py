@@ -13,7 +13,8 @@ def isolate_user_environment(tmp_path, monkeypatch):
     - 方案、小紙條、歷史紀錄的狀態都放在暫存資料夾；不讀使用者的設定檔、替換字典與自訂小紙條
     - 只能連到本機的假服務；任何對外連線直接失敗（曾因此用真金鑰呼叫到 Groq）
     - 不呼叫真正的 pactl：曾因此把使用者的藍牙喇叭切到免持模式。預設回報「有麥克風」，其他操作一律失敗
-    - 不呼叫真正的 bt-audio-profile 協調服務（它會切換真正的藍牙裝置）"""
+    - 不呼叫真正的 bt-audio-profile 協調服務（它會切換真正的藍牙裝置）
+    - 不發桌面通知、不播提示音、不碰剪貼簿、不建立虛擬鍵盤、不改 GNOME 快捷鍵"""
     from danwen import btmic, cloud, dbus_service, httpclient, paths, refine
     from danwen.asr import cloud as asr_cloud
 
@@ -71,6 +72,46 @@ def isolate_user_environment(tmp_path, monkeypatch):
 
     for module in (httpclient, refine, asr_cloud):
         monkeypatch.setattr(module, "post", local_only_post)
+
+    # 桌面上看得到的東西都不碰（曾因此在使用者桌面上冒出一串「整理模式改用小紙條」的通知）：
+    # 通知與提示音、剪貼簿（改用記憶體裡的假剪貼簿）、虛擬鍵盤（不建立真的 uinput 裝置、不按鍵）、GNOME 快捷鍵設定
+    from danwen import feedback, output, shortcuts
+
+    monkeypatch.setattr(paths, "SOUNDS_DIR", tmp_path / "isolated" / "sounds")
+    monkeypatch.setattr(feedback.Feedback, "_notify", lambda self, message, urgency: None)
+    monkeypatch.setattr(feedback.Feedback, "_play", lambda self, name: None)
+
+    clipboard: dict[str, bytes] = {}
+
+    def fake_read(target):
+        if target == "TARGETS":
+            return "\n".join(clipboard).encode() if clipboard else None
+        return clipboard.get(target)
+
+    def fake_write(data, target):
+        clipboard.clear()
+        clipboard[target] = data
+
+    monkeypatch.setattr(output.Clipboard, "_read", staticmethod(fake_read))
+    monkeypatch.setattr(output.Clipboard, "_write", staticmethod(fake_write))
+    monkeypatch.setattr(output.Clipboard, "get_selection", staticmethod(lambda: None))
+
+    class FakeKeyboard:
+        def __init__(self):
+            self.pressed: list[str] = []
+
+        def press(self, keys):
+            self.pressed.append(keys)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(output, "VirtualKeyboard", FakeKeyboard)
+
+    def no_gsettings(*args):
+        raise AssertionError(f"測試不可呼叫真正的 gsettings：{' '.join(args)}")
+
+    monkeypatch.setattr(shortcuts, "_gsettings", no_gsettings)
 
 
 class FakeLLM:

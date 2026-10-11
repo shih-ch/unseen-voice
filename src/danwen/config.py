@@ -87,6 +87,7 @@ class RefineConfig:
     context_selection: bool = False
     context_max_chars: int = 1000
     context_to_cloud: bool = False
+    terms_to_cloud: bool = False
 
 
 @dataclass

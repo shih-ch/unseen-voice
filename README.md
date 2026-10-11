@@ -87,7 +87,8 @@ cd unseen-voice
   `~/.config/danwen/prompts/*.yaml`，可自行修改或新增，檔名就是模式名稱
 - `翻譯` 的目標語言另外選：英文（預設）、日文、簡體中文。翻譯結果不會再轉成繁體或套用替換字典，
   日文的「学」「会」、簡體字才不會被改掉。要加語言就在 `翻譯.yaml` 的 `languages` 底下照樣加一段
-- 替換字典裡的正確寫法（兩個字以上）會一併交給 LLM 參考，讓發音相近的專有名詞也能寫對
+- 替換字典裡的正確寫法（兩個字以上）會一併交給本機的 LLM 參考，讓發音相近的專有名詞也能寫對。
+  整理走雲端時預設**不送**這份清單（`refine.terms_to_cloud: false`）；替換本身一律在本機做，聽錯的詞照樣會被改對
 
 ```bash
 danwen mode                 # 列出小紙條與目前模式
@@ -109,6 +110,7 @@ refine:
   context_selection: true      # 最近選取的文字
   context_max_chars: 1000      # 每個來源最多取幾個字
   context_to_cloud: false      # LLM 不在本機時預設不送上下文；要送請明確改成 true
+  terms_to_cloud: false        # 替換字典的專有名詞也預設只給本機 LLM；要送請改成 true
 ```
 
 log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的內容跟口述對不起來（例如被剪貼簿裡夾帶的指令帶走），
@@ -203,6 +205,8 @@ danwen key status / danwen key delete groq
   建議建立**權限最小**的金鑰（Cloudflare 只給 Workers AI 權限），並在服務商後台設定**用量上限**
 - **語音辨識失敗時**改用本機並通知，照樣貼上（本機辨識模型一直載入，不受 `local_fallback` 影響）
 - **上下文**（剪貼簿、選取文字）仍需另外開啟 `refine.context_to_cloud` 才會送到雲端
+- **替換字典的專有名詞**預設也不送雲端：開啟 `refine.terms_to_cloud`（設定畫面「整理」頁的「字典的專有名詞也送到雲端」）
+  才會當提示交給雲端整理與雲端辨識。替換本身一律在本機做
 - 方案的預設值是 `config.yaml` 的 `cloud.plan`；執行中切換的狀態存在 `~/.local/state/danwen/cloud`
 
 ## 歷史紀錄
@@ -234,7 +238,7 @@ systemctl --user restart danwen
 ```bash
 danwen dict                          # 列出
 danwen dict add 肉type ZeroType       # 常錯的寫法 → 正確寫法
-danwen dict add Kubernetes           # 只加專有名詞（整理模式的 LLM 會參考）
+danwen dict add Kubernetes           # 只加專有名詞（本機整理的 LLM 會參考；雲端預設不送）
 danwen dict remove 肉type
 danwen dict suggest                  # 從歷史紀錄找可能聽錯的詞，一組一組問你要不要加
 danwen dict suggest --llm            # 另外請 LLM 看最近 20 筆（會先告訴你送到哪裡、問你要不要送）
@@ -310,7 +314,7 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 |---|---|
 | 一般 | 方案、目前的小紙條、翻譯成、提示音、錯誤通知 |
 | 錄音 | 熱鍵、長錄音、藍牙耳機／喇叭的麥克風 |
-| 整理 | 雲端不能用時改用本機、上下文、依目前的程式調整、API 金鑰有沒有設定 |
+| 整理 | 整理用的模型、雲端不能用時改用本機、上下文、字典的專有名詞要不要送雲端、依目前的程式調整、API 金鑰有沒有設定 |
 | 字典 | 字典建議（點「用『前島』」或「加入」就加進字典）、請 LLM 一起找、字典的詞條 |
 | 快捷鍵 | 目前的快捷鍵，設定或移除 |
 | 紀錄 | 保留幾筆、要不要保存錄音、清除全部紀錄 |

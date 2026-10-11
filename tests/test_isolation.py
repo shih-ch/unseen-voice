@@ -41,3 +41,22 @@ def test_keyring_store_is_blocked():
 
     with pytest.raises(credentials.CredentialError, match="不讀真正的鑰匙圈"):
         credentials.KeyringStore()
+
+
+def test_desktop_is_not_touched(monkeypatch):
+    """切換小紙條的指令在沒有終端機時會發桌面通知：測試中不可真的發出、也不可碰剪貼簿或按鍵。"""
+    import subprocess
+
+    from danwen import cli, output, shortcuts
+
+    spawned = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a[0]))
+    assert cli.main(["mode", "next"]) == 0 and cli.main(["translate", "next"]) == 0
+    assert spawned == []
+    output.Clipboard.set_text("假剪貼簿")
+    assert output.Clipboard.get_text() == "假剪貼簿"
+    paster = output.Paster()
+    paster.paste("貼上", keys="ctrl+shift+v")
+    assert paster._keyboard.pressed == ["ctrl+shift+v"]
+    with pytest.raises(AssertionError, match="gsettings"):
+        shortcuts._gsettings("get", "org.gnome.settings-daemon.plugins.media-keys", "custom-keybindings")

@@ -326,6 +326,10 @@ class Refiner:
         """上下文（剪貼簿、選取文字）預設只送給本機的 LLM。"""
         return self.is_local or self.cfg.context_to_cloud
 
+    def terms_allowed(self) -> bool:
+        """字典的專有名詞預設只當提示給本機的 LLM（替換本身一律在本機做）。"""
+        return self.is_local or self.cfg.terms_to_cloud
+
     def refine(
         self,
         text: str,
@@ -340,6 +344,8 @@ class Refiner:
         if context and not self.context_allowed():
             log.warning("LLM 服務不在本機且未開啟 context_to_cloud，不送出上下文")
             context = None
+        if terms and not self.terms_allowed():
+            terms = None  # 未開啟 terms_to_cloud：字典不送到雲端
         output = self.chat(prompt.messages(text, terms, context))
         check_output(text, output, prompt.check_language)
         if post is not None and prompt.postprocess:

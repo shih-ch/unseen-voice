@@ -146,11 +146,16 @@
 - 歷史紀錄重新整理、`danwen refine` 也依方案（cloud.choose_refiner）；`--local／--cloud` 可強制
 - 測試隔離（conftest 自動套用）：不讀真正的鑰匙圈、方案／小紙條／歷史狀態放暫存資料夾、只准連 127.0.0.1——
   曾有測試因方案預設 B 而讀到使用者的真金鑰並呼叫 Groq（約 4 次，內容為測試句）
+- 也不碰桌面：不發通知、不播提示音、剪貼簿用記憶體裡的假剪貼簿、不建立 uinput 虛擬鍵盤、不呼叫 gsettings——
+  曾有測試執行 `danwen mode next`／`translate next`（pytest 沒有終端機，改發桌面通知），使用者桌面冒出一串
+  「整理模式改用小紙條」，看起來像模式自己在換（2026-10-11）
 - 錯誤訊息不含服務回傳內容（實測 Groq 的 429 訊息含組織代碼）
 - 錄音提示只在這次錄音真的送資料出去時顯示「☁」（雲端辨識，或整理模式且整理走雲端）
 - 金鑰：GNOME 鑰匙圈（`secretstorage`），`danwen key set` 不回顯；常駐程式不跳解鎖視窗；uninstall.sh 詢問後刪除
   - 已評估：檔案、systemd 環境變數皆為明文；systemd-creds 的使用者服務支援需 systemd 256（Ubuntu 24.04 為 255）
 - 上下文仍需 `refine.context_to_cloud` 才送雲端
+- 替換字典的專有名詞（正確寫法）預設只給本機 LLM（Refiner.terms_allowed）；`refine.terms_to_cloud: true` 才交給雲端整理
+  與雲端辨識（Whisper prompt）。替換一律在本機，關閉時照樣改對（2026-10-11，使用者要求預設不送）
 - 實測 Groq（2026-10-09）：整理一句約 0.7 秒；11 句測試集（含上下文人名修正、剪貼簿夾帶指令）正確，
   僅「文件→檔案」為 OpenCC 台灣用語轉換；免費額度 LLM 每分鐘 8,000 token（約 8 次整理）
 - 待實測：Cloudflare（需 account_id 與金鑰）、OpenAI

@@ -292,3 +292,23 @@ def test_init_config_removes_unmodified_retired_prompt(tmp_path, monkeypatch, ca
     assert (prompts / "改過.yaml").read_text(encoding="utf-8") == "changed"  # 使用者改過：保留
     assert (prompts / "翻譯.yaml").exists()
     assert "保留你改過的" in capsys.readouterr().out
+
+
+def test_dictionary_terms_stay_local_by_default(user_dirs, monkeypatch):
+    sent = []
+
+    def fake_post(self, url, payload, headers=None):
+        sent.append(payload["messages"][0]["content"])
+        if "api/chat" in url:
+            return {"message": {"content": "今天開會。"}}
+        return {"choices": [{"message": {"content": "今天開會。"}}]}
+
+    monkeypatch.setattr(Refiner, "_post", fake_post)
+    cloud_cfg = RefineConfig(provider="openai", base_url="https://api.groq.com/openai/v1")
+    Refiner(cloud_cfg, api_key=lambda: "k").refine("嗯，今天開會。", "日常", terms=["黃保翕"])
+    assert "黃保翕" not in sent[-1]  # 雲端：預設不送字典
+    cloud_cfg.terms_to_cloud = True
+    Refiner(cloud_cfg, api_key=lambda: "k").refine("嗯，今天開會。", "日常", terms=["黃保翕"])
+    assert "黃保翕" in sent[-1]  # 明確開啟後才送
+    Refiner(RefineConfig(base_url="http://127.0.0.1:11434")).refine("嗯，今天開會。", "日常", terms=["黃保翕"])
+    assert "黃保翕" in sent[-1]  # 本機 Ollama：照常提示

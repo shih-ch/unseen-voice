@@ -301,3 +301,30 @@ def test_model_choice_per_provider():
     assert cloud.resolve(explicit).llm_model == "openai/gpt-oss-20b"
     assert cloud.model_extra("groq", "openai/gpt-oss-999b") == {"reasoning_effort": "low"}
     assert cloud.model_extra("cloudflare", "@cf/x") == {}
+
+
+def test_cloud_asr_gets_dictionary_terms_only_when_allowed(tmp_path, monkeypatch):
+    from danwen import daemon as daemon_mod
+
+    seen = []
+
+    class FakeCloudASR:
+        name = "cloud"
+
+        def __init__(self, cloud_cfg, terms=None):
+            seen.append(terms)
+
+        def transcribe(self, audio, sr):
+            return "雲端的結果。"
+
+    monkeypatch.setattr(daemon_mod, "CloudASRBackend", FakeCloudASR)
+    cfg = config.Config()
+    cfg.feedback.sounds = False
+    cfg.cloud.plan = "groq"  # 語音辨識走雲端
+    d = daemon_mod.Daemon(cfg)
+    audio = np.full(16000, 0.1, np.float32)
+    assert d._transcribe(audio, 16000)[0] == "雲端的結果。"
+    assert seen[-1] is None  # 預設：字典不放進雲端辨識的提示詞
+    cfg.refine.terms_to_cloud = True
+    d._transcribe(audio, 16000)
+    assert callable(seen[-1])

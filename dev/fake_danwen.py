@@ -119,6 +119,7 @@ class FakeDaemon:
                            "audio.speech_check": True, "audio.bluetooth_mic": True, "audio.bluetooth_restore_s": 5.0,
                            "refine.local_fallback": False, "refine.context_clipboard": False,
                            "refine.context_selection": False, "refine.context_to_cloud": False,
+                           "refine.terms_to_cloud": False,
                            "output.app_rules": True, "history.size": 20, "history.keep_audio": False}
             self.restart = set()
         return json.dumps({"values": self.values, "hotkeys": settings.HOTKEYS, "restart_needed": sorted(self.restart),

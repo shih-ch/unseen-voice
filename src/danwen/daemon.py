@@ -376,7 +376,9 @@ class Daemon:
         """方案用雲端辨識時先試雲端，失敗就改用本機（本機模型一直保持載入）。"""
         active = self.plan()
         if active.asr:
-            backend = CloudASRBackend(active.cloud, terms=self.post.replacements.terms)
+            # 字典的專有名詞只在開啟 terms_to_cloud 時才放進雲端辨識的提示詞
+            terms = self.post.replacements.terms if self.cfg.refine.terms_to_cloud else None
+            backend = CloudASRBackend(active.cloud, terms=terms)
             try:
                 return backend.transcribe(audio, sr), backend.name
             except (cloud.CloudError, ConfigError) as e:

@@ -46,6 +46,7 @@ SETTINGS = {s.key: s for s in (
     Setting("refine.context_clipboard", bool, True),
     Setting("refine.context_selection", bool, True),
     Setting("refine.context_to_cloud", bool, True),
+    Setting("refine.terms_to_cloud", bool, True),
     Setting("output.app_rules", bool, True),
     Setting("history.size", int, False),
     Setting("history.keep_audio", bool, False),
