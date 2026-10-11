@@ -103,6 +103,11 @@ class FakeDaemon:
     def history_json(self, limit):
         return json.dumps(self.history[: limit or None], ensure_ascii=False)
 
+    def search_history_json(self, query, limit):
+        words = query.casefold().split()
+        found = [e for e in self.history if all(w in e["text"].casefold() for w in words)]
+        return json.dumps(found[: limit or None], ensure_ascii=False)
+
     def copy_history(self, entry_id):
         entry = next((e for e in self.history if e["id"] == entry_id), self.history[0] if entry_id == 0 else None)
         if entry is None:

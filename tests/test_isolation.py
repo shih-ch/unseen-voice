@@ -26,3 +26,11 @@ def test_user_config_and_state_are_not_used():
     for path in (paths.CONFIG_FILE, paths.REPLACEMENTS_FILE, paths.APPS_FILE, paths.HISTORY_DIR, refine.USER_PROMPTS_DIR,
                  refine.MODE_FILE, refine.LANGUAGE_FILE, cloud.STATE_FILE):
         assert not path.is_relative_to(real[0]) and not path.is_relative_to(real[1]), path
+
+
+def test_real_pactl_is_blocked():
+    from danwen import btmic
+
+    with pytest.raises(AssertionError, match="不可呼叫真正的 pactl"):
+        btmic.BluetoothMic().acquire.__self__._pactl("set-card-profile", "bluez_card.x", "a2dp-sink")
+    assert btmic.BluetoothMic().acquire() is None  # 測試環境一律當作「已經有麥克風」，不切換

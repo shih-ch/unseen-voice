@@ -76,6 +76,13 @@ class History:
         with self._locked():
             return list(reversed(self._load()))
 
+    def search(self, query: str) -> list[Entry]:
+        """貼上的文字或辨識原文含有每一個關鍵字（以空白分隔，不分大小寫）的紀錄，新的在前。"""
+        words = [w.casefold() for w in query.split()]
+        if not words:
+            return []
+        return [e for e in self.entries() if all(w in f"{e.text}\n{e.raw}".casefold() for w in words)]
+
     def get(self, entry_id: int | None = None) -> Entry:
         """指定編號；不指定則為最新一筆。"""
         entries = self.entries()

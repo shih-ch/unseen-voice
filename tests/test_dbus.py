@@ -69,6 +69,9 @@ class StubDaemon:
     def history_json(self, limit):
         return json.dumps([{"id": 2, "text": "第二句"}, {"id": 1, "text": "第一句"}][: limit or None], ensure_ascii=False)
 
+    def search_history_json(self, query, limit):
+        return json.dumps([{"id": 2, "text": "第二句"}] if "二" in query else [], ensure_ascii=False)
+
     def copy_history(self, entry_id):
         if entry_id == 99:
             raise KeyError("找不到第 99 筆")
@@ -131,6 +134,8 @@ def test_properties_and_methods(service):
             await iface.call_set_language("火星文")
         assert json.loads(await iface.call_get_history(1)) == [{"id": 2, "text": "第二句"}]
         assert await iface.call_copy_history(0) == "第二句"
+        assert json.loads(await iface.call_search_history("二", 5)) == [{"id": 2, "text": "第二句"}]
+        assert json.loads(await iface.call_search_history("三", 5)) == []
         assert await iface.call_redo(2, "Email") == "Email:2"
         await iface.call_start_long()
         await iface.call_stop()

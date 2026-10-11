@@ -192,8 +192,11 @@ def test_daemon_state_returns_to_idle_after_processing(tmp_path, fake_llm):
 
 
 class StubRecorder:
-    def start(self):
-        pass
+    def __init__(self):
+        self.sources = []
+
+    def start(self, source=None):
+        self.sources.append(source)
 
     def stop(self):
         return np.zeros(0, np.float32)
@@ -222,3 +225,75 @@ def test_short_long_recording_is_treated_as_accidental(tmp_path, fake_llm):
     assert d.paster.pasted == ["嗯，那個今天開會。"]
     d._process(Job(np.full(32000, 0.1, np.float32), time.monotonic(), False, "long"))  # 長錄音 2 秒：正常
     assert len(d.paster.pasted) == 2
+
+
+def test_search(tmp_path):
+    h = History(tmp_path / "history", size=10)
+    add(h, "明天下午三點開會。")
+    h.add(duration_s=1.0, backend="sensevoice", raw="嗯，那個 PR 幫我 review", text="PR 幫我 review。", mode="日常")
+    add(h, "週五下午交報告。")
+    assert [e.text for e in h.search("下午")] == ["週五下午交報告。", "明天下午三點開會。"]  # 新的在前
+    assert [e.text for e in h.search("下午 開會")] == ["明天下午三點開會。"]  # 每個關鍵字都要有
+    assert [e.text for e in h.search("pr REVIEW")] == ["PR 幫我 review。"]  # 不分大小寫
+    assert [e.text for e in h.search("那個")] == ["PR 幫我 review。"]  # 也比對辨識原文
+    assert h.search("  ") == []
+
+
+def test_cli_history_search_and_show(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(paths, "HISTORY_DIR", tmp_path / "history")
+    h = History(size=10)
+    add(h, "明天下午三點開會。")
+    add(h, "週五交報告。")
+    assert cli.main(["history", "search", "開會"]) == 0
+    out = capsys.readouterr().out
+    assert "找到 1 筆" in out and "#1" in out and "#2" not in out
+    assert cli.main(["history", "search", "沒有這個"]) == 1
+    assert cli.main(["history", "show", "2"]) == 0
+    assert "週五交報告。" in capsys.readouterr().out
+    assert cli.main(["history", "show", "abc"]) == 2
+
+
+class FakeBtMic:
+    def __init__(self, result):
+        self.result, self.released = result, 0
+
+    def acquire(self, on_switching=None):
+        if isinstance(self.result, Exception):
+            raise self.result
+        if on_switching:
+            on_switching()
+        return self.result
+
+    def release(self):
+        self.released += 1
+
+
+def test_bluetooth_mic_source_and_release(tmp_path, fake_llm):
+    from danwen.hotkey import Action
+
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d.recorder = StubRecorder()
+    d.bt_mic = FakeBtMic("bluez_input.50_4F.0")
+    states = []
+    d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: True,
+                                   "notify_state": lambda self: states.append((d.state, d.kind))})()
+    d._on_action(Action.START)
+    assert ("recording", "preparing") in states  # 切換藍牙模式時先提示
+    assert d.recorder.sources == ["bluez_input.50_4F.0"] and d.state == "recording" and d.kind == "fast"
+    d._on_action(Action.STOP)
+    assert d.bt_mic.released == 1
+
+
+def test_no_microphone_is_reported_and_stop_is_ignored(tmp_path, fake_llm):
+    from danwen.btmic import NoMicrophone
+    from danwen.hotkey import Action
+
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d.recorder = StubRecorder()
+    d.bt_mic = FakeBtMic(NoMicrophone("找不到麥克風"))
+    errors = []
+    d.feedback.error = errors.append
+    d._on_action(Action.START)
+    assert errors == ["找不到麥克風"] and d.state == "idle" and d.recorder.sources == []
+    d._on_action(Action.STOP)  # 放開熱鍵：沒有錄音可處理
+    assert d.state == "idle" and d._jobs.empty()

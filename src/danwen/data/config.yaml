@@ -13,6 +13,11 @@ hotkey:
 audio:
   # 麥克風：null＝系統預設；也可填裝置名稱的一部分或編號（`danwen devices` 列出）
   device: null
+  # 沒有其他麥克風時，錄音期間把藍牙耳機／喇叭切到免持模式（有麥克風），錄完再切回高音質播放。
+  # 切換約要 1～2 秒，畫面會提示，聽到提示音再說話。device 有指定時不會切換
+  bluetooth_mic: true
+  # 錄完幾秒後才切回高音質（連續聽寫時不必每次都等切換）；0＝立刻切回
+  bluetooth_restore_s: 5
   sample_rate: 16000
   # 短於這個長度的錄音直接丟棄（秒）
   min_duration_s: 0.4

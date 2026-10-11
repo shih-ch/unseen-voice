@@ -11,8 +11,10 @@ def isolate_user_environment(tmp_path, monkeypatch):
     """測試絕不碰使用者的真實環境：
     - 不讀真正的 GNOME 鑰匙圈（需要金鑰的測試自己換成假金鑰）
     - 方案、小紙條、歷史紀錄的狀態都放在暫存資料夾；不讀使用者的設定檔、替換字典與自訂小紙條
-    - 只能連到本機的假服務；任何對外連線直接失敗（曾因此用真金鑰呼叫到 Groq）"""
-    from danwen import cloud, httpclient, paths, refine
+    - 只能連到本機的假服務；任何對外連線直接失敗（曾因此用真金鑰呼叫到 Groq）
+    - 不呼叫真正的 pactl：曾因此把使用者的藍牙喇叭切到免持模式。預設回報「有麥克風」，其他操作一律失敗
+    - 不呼叫真正的 bt-audio-profile 協調服務（它會切換真正的藍牙裝置）"""
+    from danwen import btmic, cloud, dbus_service, httpclient, paths, refine
     from danwen.asr import cloud as asr_cloud
 
     def no_keyring(provider):
@@ -28,6 +30,18 @@ def isolate_user_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "REPLACEMENTS_FILE", tmp_path / "isolated" / "config" / "replacements.yaml")
     monkeypatch.setattr(paths, "APPS_FILE", tmp_path / "isolated" / "config" / "apps.yaml")
     monkeypatch.setattr(refine, "USER_PROMPTS_DIR", tmp_path / "isolated" / "config" / "prompts")
+
+    def fake_pactl(*args):
+        if args == ("get-default-source",):
+            return "alsa_input.test-microphone\n"
+        raise AssertionError(f"測試不可呼叫真正的 pactl：{' '.join(args)}")
+
+    monkeypatch.setattr(btmic, "_pactl", fake_pactl)
+
+    def no_bt_service(self, *args, **kwargs):
+        raise btmic.ServiceUnavailable("測試中不呼叫真正的協調服務")
+
+    monkeypatch.setattr(dbus_service.DBusService, "_bt_call", no_bt_service)
 
     real_post = httpclient.post
 

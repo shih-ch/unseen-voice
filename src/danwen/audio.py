@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import wave
 from pathlib import Path
 
@@ -21,18 +22,30 @@ class Recorder:
         self._stream = None
         self._chunks: list[np.ndarray] = []
 
-    def start(self) -> None:
+    def start(self, source: str | None = None) -> None:
+        """source：指定錄音來源（PipeWire／PulseAudio 的名稱，例如藍牙耳機的麥克風）；None＝系統預設。
+        用 PULSE_SOURCE 只影響 danwen 這次開的錄音，不改系統的預設輸入。"""
         import sounddevice as sd
 
         self._chunks = []
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            device=self.device,
-            callback=self._callback,
-        )
-        self._stream.start()
+        previous = os.environ.get("PULSE_SOURCE")
+        if source:
+            os.environ["PULSE_SOURCE"] = source
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                device=self.device,
+                callback=self._callback,
+            )
+            self._stream.start()
+        finally:
+            if source:
+                if previous is None:
+                    os.environ.pop("PULSE_SOURCE", None)
+                else:
+                    os.environ["PULSE_SOURCE"] = previous
 
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:

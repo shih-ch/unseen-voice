@@ -35,6 +35,22 @@ class Shortcut:
     binding: str
     args: tuple[str, ...]  # danwen 之後的參數
 
+    @property
+    def binding_label(self) -> str:
+        return binding_label(self.binding)
+
+    @property
+    def short(self) -> str:
+        """簡短說明，例如「小紙條 日常」。"""
+        return self.name.split("：", 1)[-1]
+
+
+def binding_label(binding: str) -> str:
+    """「<Super><Alt>m」→「Super+Alt+M」。"""
+    mods = [m.replace("Primary", "Ctrl").replace("Control", "Ctrl") for m in binding.split(">")[:-1]]
+    key = binding.split(">")[-1]
+    return "+".join([m.lstrip("<") for m in mods] + [key.upper() if len(key) == 1 else key])
+
 
 SHORTCUTS = (
     Shortcut("danwen-mode-next", "但聞人語：下一張小紙條", "<Super><Alt>m", ("mode", "next")),
@@ -162,6 +178,12 @@ class Shortcuts:
                 self._gs("reset", f"{CUSTOM}:{path}", key)
         self._set_paths([p for p in paths if p not in ours])
         return removed
+
+    def update(self, command: str) -> tuple[list[Shortcut], list[tuple[Shortcut, str]]] | None:
+        """已經設定過 danwen 的快捷鍵時才更新（新增的項目、改過的指令）；沒設定過回傳 None，不做任何變更。"""
+        if not self.status():
+            return None
+        return self.install(command)
 
     def status(self) -> list[tuple[str, str, str]]:
         """danwen 目前設定的快捷鍵：（名稱, 按鍵, 指令）。"""

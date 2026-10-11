@@ -93,3 +93,27 @@ def test_commands_quote_chinese_names():
     command = gs.custom[f"{BASE_PATH}danwen-mode-2/"]["command"]
     assert shlex.split(command) == ["/home/u/.local/bin/danwen", "mode", "會議記錄"]
     assert CUSTOM.endswith("custom-keybinding")
+
+
+def test_update_only_when_already_installed():
+    gs = FakeGSettings(existing(), {})
+    sc = Shortcuts(gs)
+    before = list(gs.paths)
+    assert sc.update("/x/danwen") is None  # 沒設定過：不動 GNOME 設定
+    assert gs.paths == before
+
+    # 舊版設定過的快捷鍵：Super+Alt+4 還指向已刪除的 Slack，也沒有 Super+Alt+T
+    old = f"{BASE_PATH}danwen-mode-4/"
+    gs.custom[old] = {"name": "但聞人語：小紙條 Slack", "binding": "<Super><Alt>4", "command": "/x/danwen mode Slack"}
+    gs.paths.append(old)
+    added, skipped = sc.update("/x/danwen")
+    assert shlex.split(gs.custom[old]["command"]) == ["/x/danwen", "mode", "社群"]
+    assert f"{BASE_PATH}danwen-translate-next/" in gs.paths
+    assert gs.paths.count(old) == 1
+
+
+def test_binding_label():
+    from danwen.shortcuts import binding_label
+
+    assert binding_label("<Super><Alt>m") == "Super+Alt+M"
+    assert binding_label("<Primary><Shift>F9") == "Ctrl+Shift+F9"

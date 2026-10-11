@@ -22,6 +22,7 @@ from .apps import DEFAULT_PASTE, AppRules, FocusedApp
 from .asr import ASRUnavailable, create_backend
 from .asr.cloud import CloudASRBackend
 from .audio import Recorder, dbfs
+from .btmic import BluetoothMic, NoMicrophone
 from .config import Config, ConfigError
 from .feedback import Feedback
 from .history import History, redo_entry
@@ -49,6 +50,11 @@ class Daemon:
         self.cfg = cfg
         self.feedback = Feedback(cfg.feedback.sounds, cfg.feedback.notify_errors)
         self.recorder = Recorder(cfg.audio.sample_rate, cfg.audio.device)
+        # 使用者自己指定了麥克風就不切換藍牙模式
+        use_bt = cfg.audio.bluetooth_mic and cfg.audio.device is None
+        # 有安裝 bt-audio-profile 的協調服務就透過它借用（透過 danwen 的 D-Bus 連線），沒有就用內建的
+        self.bt_mic = BluetoothMic(cfg.audio.bluetooth_restore_s, remote=lambda: self.dbus) if use_bt else None
+        self._recording_ok = False
         self.backend = create_backend(cfg.asr.backend, cfg)
         replacements = cfg.postprocess.replacements
         self.post = PostProcessor(
@@ -147,6 +153,8 @@ class Daemon:
             worker.join(timeout=5)
             self.paster.close()
             self.backend.close()
+            if self.bt_mic is not None:
+                self.bt_mic.close()  # 還在免持模式就切回原本的
             if self.dbus:
                 self.dbus.stop()
 
@@ -156,12 +164,25 @@ class Daemon:
             long = action is Action.START_LONG
             wants_refine = action is Action.START_REFINE or (long and self.cfg.long_recording.refine)
             self._refining = wants_refine and self.refiner is not None
+            self._recording_ok = False
+            source = None
+            if self.bt_mic is not None:
+                try:
+                    # 要切換藍牙模式時先提示「準備麥克風」，切好才響開始錄音的提示音
+                    source = self.bt_mic.acquire(on_switching=lambda: self._set_state("recording", "preparing"))
+                except NoMicrophone as e:
+                    self.feedback.error(str(e))
+                    self._set_state("idle")
+                    return
             try:
-                self.recorder.start()
+                self.recorder.start(source)
             except Exception as e:
                 self.feedback.error(f"無法開啟麥克風：{e}")
                 self._set_state("idle")
+                if self.bt_mic is not None:
+                    self.bt_mic.release()
                 return
+            self._recording_ok = True
             # 錄音已經開始才查目前的程式（經 D-Bus，通常幾毫秒），不會漏掉開頭的聲音
             mode, by_app = self._choose_mode() if self._refining else ("", False)
             self.recording_mode, self.recording_mode_by_app = mode, by_app
@@ -175,11 +196,17 @@ class Daemon:
                 self.refiner.preload()  # 說話的同時把模型載入記憶體
         elif action is Action.STOP:
             audio = self.recorder.stop()
+            if self.bt_mic is not None:
+                self.bt_mic.release()
+            if not self._recording_ok:  # 麥克風沒開成功，已經通知過
+                return
             self.feedback.stop()
             self._set_state("processing")
             self._jobs.put(Job(audio, now, self._refining, self.kind, self._refine_target, self.recording_mode))
         elif action is Action.CANCEL:
             self.recorder.stop()
+            if self.bt_mic is not None:
+                self.bt_mic.release()
             self.recording_mode, self.recording_mode_by_app = "", False
             self._set_state("idle")
             log.info("錄音已取消（組合鍵或 Esc）")
@@ -418,6 +445,14 @@ class Daemon:
         if self.history is None:
             return "[]"
         entries = self.history.entries()
+        if limit > 0:
+            entries = entries[:limit]
+        return json.dumps([dataclasses.asdict(e) for e in entries], ensure_ascii=False)
+
+    def search_history_json(self, query: str, limit: int) -> str:
+        if self.history is None:
+            return "[]"
+        entries = self.history.search(query)
         if limit > 0:
             entries = entries[:limit]
         return json.dumps([dataclasses.asdict(e) for e in entries], ensure_ascii=False)

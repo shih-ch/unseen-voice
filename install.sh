@@ -119,6 +119,14 @@ info "$DANWEN_BIN"
 # ---- 5. 設定檔與模型 ----
 say "建立設定檔"
 "$DANWEN_BIN" init-config | sed 's/^/    /'
+
+# 切換小紙條的 GNOME 快捷鍵：設定過才更新（新增的項目、改過的指令）；沒設定過只提示，不動 GNOME 設定
+say "GNOME 快捷鍵"
+if SHORTCUTS_OUT="$("$DANWEN_BIN" shortcuts update 2>&1)"; then
+    printf '%s\n' "$SHORTCUTS_OUT" | sed 's/^/    /'
+else
+    warn "無法讀取 GNOME 快捷鍵設定（不影響聽寫）：$SHORTCUTS_OUT"
+fi
 say "下載 SenseVoice 模型（首次約 230 MB）"
 "$DANWEN_BIN" download -b sensevoice || warn "模型下載失敗，danwen 首次啟動時會再試"
 

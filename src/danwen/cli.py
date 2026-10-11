@@ -259,6 +259,16 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
     from .output import Clipboard
     from .refine import RefineError, current_mode, mode_label
 
+    def show_list(entries) -> None:
+        for e in entries:
+            when = e.time[5:16].replace("T", " ")
+            kind = f"整理:{e.mode}" if e.mode else "快速"
+            preview = e.text.replace("\n", " ⏎ ")
+            preview = preview[:40] + "…" if len(preview) > 40 else preview
+            print(f"#{e.id:<4} {when}  {_pad(kind, 14)} {e.duration_s:5.1f}s  {preview}")
+        print("\n查看：danwen history show 編號｜複製：danwen history copy 編號｜"
+              "換小紙條重新整理：danwen history redo 編號 -m 小紙條")
+
     history = History(size=cfg.history.size, keep_audio=cfg.history.keep_audio)
     try:
         if args.action == "list":
@@ -266,19 +276,27 @@ def cmd_history(args: argparse.Namespace, cfg: config.Config) -> int:
             if not entries:
                 print("還沒有任何歷史紀錄" + ("（history.size 為 0，未啟用）" if cfg.history.size <= 0 else ""))
                 return 0
-            for e in entries:
-                when = e.time[5:16].replace("T", " ")
-                kind = f"整理:{e.mode}" if e.mode else "快速"
-                preview = e.text.replace("\n", " ⏎ ")
-                preview = preview[:40] + "…" if len(preview) > 40 else preview
-                print(f"#{e.id:<4} {when}  {_pad(kind, 14)} {e.duration_s:5.1f}s  {preview}")
-            print("\n查看：danwen history show 編號｜複製：danwen history copy 編號｜"
-                  "換小紙條重新整理：danwen history redo 編號 -m 小紙條")
+            show_list(entries)
+            return 0
+        if args.action == "search":
+            query = " ".join(args.target)
+            if not query.strip():
+                print("用法：danwen history search 關鍵字（可以有好幾個，以空白分隔）", file=sys.stderr)
+                return 2
+            found = history.search(query)
+            if not found:
+                print(f"沒有含「{query}」的紀錄（只保留最近 {cfg.history.size} 筆）")
+                return 1
+            print(f"找到 {len(found)} 筆：")
+            show_list(found)
             return 0
         if args.action == "clear":
             print(f"已清除 {history.clear()} 筆")
             return 0
-        entry = history.get(args.id)
+        if len(args.target) > 1 or (args.target and not args.target[0].isdigit()):
+            print(f"編號要是一個數字：danwen history {args.action} 12", file=sys.stderr)
+            return 2
+        entry = history.get(int(args.target[0]) if args.target else None)
         if args.action == "show":
             print(f"編號：#{entry.id}" + (f"（由 #{entry.redo_of} 重新整理）" if entry.redo_of else ""))
             print(f"時間：{entry.time}　長度：{entry.duration_s}s　辨識：{entry.backend}")
@@ -495,6 +513,18 @@ def cmd_shortcuts(args: argparse.Namespace, cfg: config.Config) -> int:
             for sc, owner in skipped:
                 print(f"  ✗ {sc.binding:<16} {sc.name}（略過：已被「{owner}」使用）")
             print("已設定 GNOME 快捷鍵；移除：danwen shortcuts remove")
+        elif args.action == "update":
+            result = shortcuts.update(danwen_command())
+            if result is None:
+                print("還沒設定切換小紙條的快捷鍵。要用的話執行：danwen shortcuts install")
+                print("（會新增 " + "、".join(f"{sc.binding_label} {sc.short}" for sc in SHORTCUTS) + "）")
+                return 0
+            added, skipped = result
+            print("已更新 GNOME 快捷鍵：")
+            for sc in added:
+                print(f"  ✓ {sc.binding_label:<12} {sc.short}")
+            for sc, owner in skipped:
+                print(f"  ✗ {sc.binding_label:<12} {sc.short}（略過：已被「{owner}」使用）")
         elif args.action == "remove":
             removed = shortcuts.remove()
             print(f"已移除：{'、'.join(removed)}" if removed else "沒有 danwen 的快捷鍵")
@@ -575,9 +605,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
     p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")
-    p = sub.add_parser("history", help="歷史紀錄：列出、查看、複製、重聽、換小紙條重新整理")
-    p.add_argument("action", nargs="?", choices=("list", "show", "copy", "redo", "play", "clear"), default="list")
-    p.add_argument("id", nargs="?", type=int, help="編號（預設為最新一筆）")
+    p = sub.add_parser("history", help="歷史紀錄：列出、搜尋、查看、複製、重聽、換小紙條重新整理")
+    p.add_argument("action", nargs="?", choices=("list", "search", "show", "copy", "redo", "play", "clear"),
+                   default="list")
+    p.add_argument("target", nargs="*", help="編號（預設為最新一筆）；search 時為關鍵字")
     p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式；翻譯可寫「日文」）")
     p = sub.add_parser("apps", help="依目前的程式調整貼法與小紙條：列出規則、查目前的程式")
     p.add_argument("--delay", type=int, default=0, help="幾秒後再讀取目前的程式（讓你先切到要查的視窗）")
@@ -590,7 +621,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("provider", nargs="?", help="groq、openai、cloudflare、custom（預設為設定檔的 cloud.provider）")
     p.add_argument("--all", action="store_true", help="delete 時刪除 danwen 的全部金鑰")
     p = sub.add_parser("shortcuts", help="GNOME 快捷鍵：切換小紙條（Super+Alt+M、Super+Alt+1～5）與翻譯語言（Super+Alt+T）")
-    p.add_argument("action", nargs="?", choices=("status", "install", "remove"), default="status")
+    p.add_argument("action", nargs="?", choices=("status", "install", "update", "remove"), default="status",
+                   help="update：已設定過才更新（install.sh 用）")
     sub.add_parser("init-config", help="建立預設設定檔、替換字典與小紙條（不覆蓋既有檔案）")
 
     args = parser.parse_args(argv)

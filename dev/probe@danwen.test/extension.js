@@ -5,6 +5,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -32,7 +33,12 @@ function dump(menu, indent = '') {
             continue;
         }
         const mark = item._ornament === PopupMenu.Ornament.CHECK ? '✓' : ' ';
-        out(`${indent}${mark} ${item.label?.text ?? '──'}`);
+        // 項目右邊的快捷鍵提示；搜尋框印出目前的文字
+        const hints = item.get_children().filter(c => c instanceof St.Label && c !== item.label && c.visible && c.text)
+            .map(c => `〔${c.text}〕`).join('');
+        const entry = item.get_children().find(c => c instanceof St.Entry);
+        const text = entry ? `［搜尋框：${entry.get_text() || entry.hint_text}］` : item.label?.text ?? '──';
+        out(`${indent}${mark} ${text}${hints}`);
         if (item instanceof PopupMenu.PopupSubMenuMenuItem)
             dump(item.menu, `${indent}    `);
     }
@@ -131,6 +137,20 @@ async function run() {
     }
     await openAndDump(indicator, '剛啟動');
 
+    // 還沒設定快捷鍵時，選單裡有「設定切換小紙條的快捷鍵」：點下去後再打開選單，提示要出現
+    // 每次打開選單都會重建清單，所以要打開後再找
+    indicator.menu.open();
+    await wait(1500);
+    const setup = indicator._modeMenu.menu._getMenuItems().find(i => i.label?.text.startsWith('設定切換小紙條的快捷鍵'));
+    if (!setup) {
+        indicator.menu.close();
+        await wait(300);
+    } else {
+        setup.activate(null);
+        await wait(4000);
+        await openAndDump(indicator, '點了「設定快捷鍵」之後');
+    }
+
     indicator.menu.open();
     await wait(1500);
     indicator._languageItems.get('日文')?.activate(null);
@@ -145,6 +165,18 @@ async function run() {
     await indicator._cycleMode(-1);
     await wait(800);
     out('滾輪上一張後，狀態列：', indicator._statusItem.label.text);
+
+    indicator.menu.open();
+    await wait(1500);
+    indicator._searchEntry.text = '會議 下午';
+    await wait(1200);
+    out('搜尋「會議 下午」：', indicator._historyHeader.label.text,
+        JSON.stringify(indicator._history._getMenuItems().map(i => i.label.text)));
+    indicator._searchEntry.text = '找不到的字';
+    await wait(1200);
+    out('搜尋「找不到的字」：', JSON.stringify(indicator._history._getMenuItems().map(i => i.label.text)));
+    indicator.menu.close();
+    await wait(500);
 
     await indicator._redo('翻譯（簡體中文）');
     out('換小紙條重新整理（翻譯（簡體中文））完成');

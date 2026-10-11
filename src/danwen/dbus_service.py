@@ -153,6 +153,10 @@ class _Interface(ServiceInterface):
         return self._call(self._daemon.history_json, limit)
 
     @method()
+    def SearchHistory(self, query: "s", limit: "i") -> "s":  # 關鍵字以空白分隔；回傳格式同 GetHistory
+        return self._call(self._daemon.search_history_json, query, limit)
+
+    @method()
     def CopyHistory(self, entry_id: "i") -> "s":
         return self._call(self._daemon.copy_history, entry_id)
 
@@ -253,6 +257,35 @@ class DBusService:
             return future.result(timeout)
         except Exception:
             return False
+
+    # ---- bt-audio-profile 的協調服務（選用）：借用藍牙麥克風 ----
+
+    def _bt_call(self, member: str, signature: str = "", body: list | None = None, timeout: float = 8.0) -> list:
+        from .btmic import SERVICE_BUS_NAME, SERVICE_INTERFACE, SERVICE_OBJECT_PATH, NoMicrophone, ServiceUnavailable
+
+        if self._loop is None or self._bus is None or not self._loop.is_running():
+            raise ServiceUnavailable("D-Bus 未連線")
+        message = Message(destination=SERVICE_BUS_NAME, path=SERVICE_OBJECT_PATH, interface=SERVICE_INTERFACE,
+                          member=member, signature=signature, body=body or [])
+        # 借用者就是 danwen 這條 D-Bus 連線：danwen 結束或當掉時，協調服務會自動歸還
+        future = asyncio.run_coroutine_threadsafe(self._bus.call(message), self._loop)
+        try:
+            reply = future.result(timeout)
+        except Exception as e:
+            future.cancel()
+            raise ServiceUnavailable(f"協調服務沒有回應：{e}") from e
+        if reply.message_type == MessageType.ERROR:
+            text = str(reply.body[0]) if reply.body else str(reply.error_name)
+            if str(reply.error_name).endswith(".NoMicrophone"):
+                raise NoMicrophone(text)
+            raise ServiceUnavailable(text)  # 沒安裝（ServiceUnknown）等
+        return reply.body
+
+    def bt_acquire(self, who: str) -> str:
+        return str(self._bt_call("Acquire", "s", [who])[0])
+
+    def bt_release(self, restore_after_s: float) -> None:
+        self._bt_call("Release", "d", [float(restore_after_s)])
 
     def focused_app(self, timeout: float = 0.25):
         """目前的程式（由 GNOME extension 提供）；沒有 extension 或逾時時回傳 None。可從任何執行緒呼叫。"""

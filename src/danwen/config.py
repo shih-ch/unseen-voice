@@ -32,6 +32,8 @@ class AudioConfig:
     min_duration_s: float = 0.4
     max_duration_s: float = 120.0
     silence_dbfs: float = -50.0
+    bluetooth_mic: bool = True
+    bluetooth_restore_s: float = 5.0
 
 
 @dataclass

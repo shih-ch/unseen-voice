@@ -209,12 +209,36 @@
      遠端桌面 portal 送 keysym 也不保證打得出中文。貼不進去的程式改用 paste: none（只放剪貼簿並通知）
    - `danwen apps [--delay N]` 列出規則與目前的程式；`danwen paste-test --keys`；設定 `output.app_rules` 可關閉
    - 目前的程式不送給 LLM（只用來選貼法與小紙條）
-2. 歷史搜尋（小）：`danwen history search`，選單也可加
+2. ✅ 歷史搜尋（2026-10-10）：`danwen history search 關鍵字…`（以空白分隔、每個都要有、不分大小寫，比對貼上的文字與辨識原文）；
+   D-Bus `SearchHistory(query, limit)`；extension 選單的搜尋框（輸入後 0.25 秒查詢，關閉選單時清空）
+   - 同時加上快捷鍵提示：extension 從 GSettings 讀 danwen- 開頭的自訂快捷鍵（先確認 schema 存在，否則 Gio.Settings 會讓
+     GNOME Shell 當掉），在小紙條、子選單標題旁顯示按鍵；還沒設定時選單有「設定切換小紙條的快捷鍵」，執行 danwen shortcuts install
+   - install.sh 執行 `danwen shortcuts update`：設定過才更新（新增項目、改過的指令），沒設定過只提示，不動 GNOME 設定
 3. 設定畫面（中～大）：extension 的設定頁（prefs.js），在「擴充功能」App 裡就能改
 4. 字典自動產生規則（中）：例如從使用者改過的整理結果找出常錯的詞，建議加進字典
 5. 螢幕內容當上下文（大）：截圖＋文字辨識；送雲端前要讓使用者先確認內容，隱私風險最高，最後再考慮
 
 其他待辦：方案 D（Cloudflare）待使用者填 account_id、設定金鑰後實測，再決定整理用的模型
+
+## 藍牙麥克風（2026-10-10）
+- 問題：使用者只有藍牙喇叭（Xiaomi Desktop Speaker，有免持麥克風）沒有其他麥克風；喇叭固定在 A2DP 時，
+  系統預設輸入變成喇叭播放聲音的 .monitor，danwen 錄到的是播放的聲音。WirePlumber 0.4 只替
+  media-role.applications 名單裡的通話程式（Firefox、Chrome、Zoom、Telegram…）自動切到免持
+- `btmic.BluetoothMic`（透過 pactl）：開始錄音前，預設輸入是麥克風就不動；是 .monitor 時先找現成的 bluez_input，
+  沒有就把預設輸出所屬的藍牙裝置（其次任何有免持模式的）切到 sources ≥ 1 中優先權最高的模式（通常 mSBC），
+  等 bluez_input.<位址> 出現（最多 4 秒）才開始錄；錄完 `audio.bluetooth_restore_s`（預設 5 秒）後切回原本的模式，
+  期間再錄就沿用；裝置已斷線或使用者自己換過模式就不切回；danwen 結束時立刻切回
+- 錄音以 PULSE_SOURCE 指定來源（ALSA 預設走 pulse 外掛，每次開串流都會讀），不改系統預設輸入
+- 切換時 State=recording、Kind=preparing，extension 顯示「切換藍牙麥克風中，聽到提示音再說話」；切好才響提示音
+- 沒有麥克風可用（NoMicrophone）時通知並放棄這次錄音；pactl 失敗時照舊用系統預設，不影響聽寫
+- 實測 Xiaomi 喇叭：切換 0.1 秒、開頭無聲 0.04 秒、切回 0.04 秒
+- 測試隔離：conftest 把 btmic._pactl 換成假的（預設回報有麥克風，其他指令一律失敗）——
+  曾因測試呼叫到真正的 pactl，把使用者的喇叭切到免持模式；DBusService._bt_call 也擋掉
+- 協調服務（使用者的 bt-audio-profile，另一個專案，選用）：有安裝時 danwen 透過自己的 D-Bus 連線呼叫
+  `io.github.shih_ch.BtAudio1.Acquire("danwen")`／`Release(秒)`，借用者以連線計算（danwen 當掉自動歸還）；
+  服務沒安裝（ServiceUnknown）或沒回應時改用內建；NoMicrophone 錯誤照常通知。
+  規則：預設輸入是麥克風不切；記錄借用者，全部歸還幾秒後才切回；只切回自己切的、且沒有其他程式在用藍牙麥克風；
+  手動切到免持不自動切回，借用中手動切回 A2DP 會等借用結束。內建版也會在其他程式還在錄藍牙麥克風時延後切回
 
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示

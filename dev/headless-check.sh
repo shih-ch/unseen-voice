@@ -6,8 +6,9 @@
 #
 # 用法：dev/headless-check.sh                     印出選單內容與操作結果
 #      SHOTS=docs/screenshots dev/headless-check.sh  改為截圖（README 用的圖）
-#      SIZE=1600x1000 SCALE=1 dev/headless-check.sh  螢幕大小與縮放（截圖預設 2560x1600、2 倍，介面用繁體中文）
+#      SIZE=1600x1000 SCALE=1 dev/headless-check.sh  螢幕大小與縮放（截圖預設 2560x2048、2 倍，介面用繁體中文）
 #      VERBOSE=1 dev/headless-check.sh               顯示 GNOME Shell 的完整輸出（除錯用）
+#      DANWEN_NO_SHORTCUTS=1 dev/headless-check.sh   不預先設定快捷鍵，測選單裡的「設定快捷鍵」
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,8 +33,8 @@ if [ -n "${SHOTS:-}" ]; then
     mkdir -p "$SHOTS"
     DANWEN_PROBE_SHOTS="$(cd "$SHOTS" && pwd)"
     export DANWEN_PROBE_SHOTS
-    # 截圖用 2 倍縮放（畫面上等於 1280×800）與繁體中文介面
-    export DANWEN_SIZE="${SIZE:-2560x1600}" DANWEN_SCALE="${SCALE:-2}"
+    # 截圖用 2 倍縮放（畫面上等於 1280×1024，選單展開子選單也放得下）與繁體中文介面
+    export DANWEN_SIZE="${SIZE:-2560x2048}" DANWEN_SCALE="${SCALE:-2}"
     export LANG="${SHOT_LANG:-zh_TW.UTF-8}" LANGUAGE="${SHOT_LANG:-zh_TW}" LC_ALL="${SHOT_LANG:-zh_TW.UTF-8}"
 else
     export DANWEN_SIZE="${SIZE:-1280x800}" DANWEN_SCALE="${SCALE:-1}"
@@ -44,6 +45,10 @@ dbus-run-session -- bash -c '
     gsettings set org.gnome.shell disable-user-extensions false
     gsettings set org.gnome.shell enabled-extensions "[\"$DANWEN_UUID\", \"$DANWEN_PROBE\"]"
     gsettings set org.gnome.desktop.interface scaling-factor "$DANWEN_SCALE"
+    # 在隔離的 GNOME 設定裡建好 danwen 的快捷鍵，選單才會顯示快捷鍵提示
+    if [ -z "${DANWEN_NO_SHORTCUTS:-}" ]; then
+        "$DANWEN_PYTHON" -m danwen shortcuts install >/dev/null 2>&1 || echo "（設定快捷鍵失敗，選單不會有快捷鍵提示）"
+    fi
     "$DANWEN_PYTHON" "$DANWEN_REPO/dev/fake_danwen.py" > "$XDG_STATE_HOME/fake.log" 2>&1 &
     FAKE=$!
     timeout 60 gnome-shell --headless --virtual-monitor "$DANWEN_SIZE" --mode=user 2>&1 |

@@ -60,6 +60,10 @@ const IFACE_XML = `
     <method name="GetHistory">
       <arg type="i" name="limit" direction="in"/><arg type="s" direction="out"/>
     </method>
+    <method name="SearchHistory">
+      <arg type="s" name="query" direction="in"/><arg type="i" name="limit" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
     <method name="CopyHistory">
       <arg type="i" name="entry_id" direction="in"/><arg type="s" direction="out"/>
     </method>
@@ -76,7 +80,7 @@ const IFACE_XML = `
 const DanwenProxy = Gio.DBusProxy.makeProxyWrapper(IFACE_XML);
 
 const STATE_LABELS = {idle: '待命中', recording: '錄音中', processing: '辨識、整理中…'};
-const KIND_LABELS = {fast: '快速', refine: '整理', long: '長錄音'};
+const KIND_LABELS = {fast: '快速', refine: '整理', long: '長錄音', preparing: '準備麥克風'};
 const ICONS = {
     offline: 'microphone-disabled-symbolic',
     idle: 'audio-input-microphone-symbolic',
@@ -89,6 +93,44 @@ const KEY_NAMES = {
     KEY_CAPSLOCK: 'Caps Lock', KEY_SCROLLLOCK: 'Scroll Lock', KEY_PAUSE: 'Pause', KEY_COMPOSE: 'Menu',
 };
 const HISTORY_ITEMS = 5;
+const MEDIA_KEYS = 'org.gnome.settings-daemon.plugins.media-keys';
+
+Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
+
+// 「<Super><Alt>m」→「Super+Alt+M」
+function bindingLabel(binding) {
+    const mods = [...binding.matchAll(/<(\w+)>/g)].map(m => ({Primary: 'Ctrl', Control: 'Ctrl'})[m[1]] ?? m[1]);
+    const key = binding.replace(/<\w+>/g, '');
+    return [...mods, key.length === 1 ? key.toUpperCase() : key].join('+');
+}
+
+// 讀出 danwen shortcuts install 建立的 GNOME 快捷鍵：「mode:日常」「mode:next」「translate:next」→ 按鍵
+function shortcutHints() {
+    const hints = new Map();
+    const source = Gio.SettingsSchemaSource.get_default();
+    // 找不到 schema 時建立 Gio.Settings 會讓整個 GNOME Shell 當掉，先確認
+    if (!source?.lookup(MEDIA_KEYS, true) || !source.lookup(`${MEDIA_KEYS}.custom-keybinding`, true))
+        return hints;
+    for (const path of new Gio.Settings({schema_id: MEDIA_KEYS}).get_strv('custom-keybindings')) {
+        if (!/\/danwen-[^/]+\/$/.test(path))
+            continue;
+        const settings = new Gio.Settings({schema_id: `${MEDIA_KEYS}.custom-keybinding`, path});
+        const binding = settings.get_string('binding');
+        // 指令最後是「mode 日常」「mode '會議記錄'」「translate next」（中文會加上引號）
+        const match = settings.get_string('command').match(/\s(mode|translate)\s+(?:'([^']*)'|(\S+))\s*$/);
+        if (binding && match)
+            hints.set(`${match[1]}:${match[2] ?? match[3]}`, bindingLabel(binding));
+    }
+    return hints;
+}
+
+// 選單項目右邊的快捷鍵提示
+function hintLabel(text = '') {
+    return new St.Label({
+        text, style_class: 'danwen-shortcut', x_expand: true,
+        x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.CENTER, visible: Boolean(text),
+    });
+}
 // 可以另外選目標語言的小紙條（與 danwen 的 refine.TRANSLATE 相同）
 const TRANSLATE = '翻譯';
 
@@ -159,6 +201,14 @@ class DanwenOsd extends St.BoxLayout {
     }
 
     _render() {
+        if (this._kind === 'preparing') {
+            // 藍牙耳機／喇叭切到免持模式中（約 1～2 秒），切好會響提示音
+            this._dot.text = '…';
+            this._dot.add_style_class_name('processing');
+            this._label.text = '切換藍牙麥克風中，聽到提示音再說話';
+            this._position();
+            return;
+        }
         const recording = this._state === 'recording';
         this._dot.text = recording ? '●' : '…';
         if (recording)
@@ -240,6 +290,9 @@ class DanwenIndicator extends PanelMenu.Button {
         this._historySignalId = 0;
         this._generation = 0;
         this._modeItems = new Map();
+        this._historyGeneration = 0;
+        this._searchTimeoutId = 0;
+        this._hasHistory = false;
         this._scrollDelta = 0;
         this._lastCycle = 0;
         this._cancellable = new Gio.Cancellable();
@@ -254,6 +307,8 @@ class DanwenIndicator extends PanelMenu.Button {
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
                 this._refreshLists();
+            else
+                this._searchEntry.text = ''; // 下次打開時回到最近的聽寫
         });
         // 滑鼠停在圖示上滾動滾輪：切換小紙條
         this.connect('scroll-event', (_actor, event) => this._onScroll(event));
@@ -306,15 +361,25 @@ class DanwenIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._planMenu);
 
         this._modeMenu = new PopupMenu.PopupSubMenuMenuItem('小紙條');
+        this._modeHint = this._addHeaderHint(this._modeMenu);
         this.menu.addMenuItem(this._modeMenu);
 
         // 翻譯的目標語言（選了就一併切到「翻譯」）；danwen 沒有提供語言時隱藏
         this._languageMenu = new PopupMenu.PopupSubMenuMenuItem('翻譯成');
+        this._languageHint = this._addHeaderHint(this._languageMenu);
         this._languageItems = new Map();
         this.menu.addMenuItem(this._languageMenu);
 
         this._historyHeader = new PopupMenu.PopupSeparatorMenuItem('最近的聽寫（點一下複製）');
         this.menu.addMenuItem(this._historyHeader);
+        // 搜尋歷史紀錄：打字後稍等一下才查詢，關鍵字以空白分隔
+        this._searchItem = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        this._searchEntry = new St.Entry({
+            hint_text: '搜尋歷史紀錄…', can_focus: true, x_expand: true, style_class: 'danwen-search',
+        });
+        this._searchEntry.clutter_text.connect('text-changed', () => this._scheduleSearch());
+        this._searchItem.add_child(this._searchEntry);
+        this.menu.addMenuItem(this._searchItem);
         this._history = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._history);
         this._redoMenu = new PopupMenu.PopupSubMenuMenuItem('換小紙條重新整理最新一筆');
@@ -351,7 +416,7 @@ class DanwenIndicator extends PanelMenu.Button {
         } else {
             this._osd.update('offline', '', '', '', false);
         }
-        for (const part of [this._modeMenu, this._historyHeader, this._history.actor, this._planMenu])
+        for (const part of [this._modeMenu, this._historyHeader, this._searchItem, this._history.actor, this._planMenu])
             part.visible = running;
         this._languageMenu.visible = running && this._languageItems.size > 0;
         if (!running)
@@ -396,11 +461,11 @@ class DanwenIndicator extends PanelMenu.Button {
             return;
         const generation = ++this._generation;
         let modes, history, plans, languages = [];
+        const query = this._searchEntry.get_text().trim();
         try {
             [plans] = await this._proxy.ListPlansAsync();
             [modes] = await this._proxy.ListModesAsync();
-            const [json] = await this._proxy.GetHistoryAsync(HISTORY_ITEMS);
-            history = JSON.parse(json);
+            history = await this._fetchHistory(query);
         } catch (e) {
             logError(e, `${APP_NAME}：讀取小紙條或歷史紀錄失敗`);
             return;
@@ -423,6 +488,7 @@ class DanwenIndicator extends PanelMenu.Button {
             this._planItems.set(name, item);
         }
 
+        const hints = shortcutHints();
         const mode = this._proxy.Mode;
         this._modeMenu.menu.removeAll();
         this._modeItems.clear();
@@ -430,7 +496,15 @@ class DanwenIndicator extends PanelMenu.Button {
             const item = this._addItem(this._modeMenu.menu, description ? `${name}　—　${description}` : name,
                 () => this._call('SetModeAsync', name));
             item.setOrnament(name === mode ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+            if (hints.has(`mode:${name}`))
+                item.add_child(hintLabel(hints.get(`mode:${name}`)));
             this._modeItems.set(name, item);
+        }
+        this._setHint(this._modeHint, hints.has('mode:next') ? `下一張 ${hints.get('mode:next')}` : '');
+        this._setHint(this._languageHint, hints.has('translate:next') ? `下一種 ${hints.get('translate:next')}` : '');
+        if (hints.size === 0) {
+            this._addItem(this._modeMenu.menu, '設定切換小紙條的快捷鍵（Super+Alt+1～5 等）…',
+                () => this._installShortcuts());
         }
 
         const language = this._proxy.Language;
@@ -443,17 +517,9 @@ class DanwenIndicator extends PanelMenu.Button {
         }
         this._languageMenu.visible = languages.length > 0;
 
-        this._history.removeAll();
-        if (history.length === 0) {
-            this._history.addMenuItem(new PopupMenu.PopupMenuItem('（還沒有紀錄）', {reactive: false}));
-        }
-        for (const entry of history) {
-            const tag = entry.mode ? `［${entry.mode}］` : '';
-            this._addItem(this._history, `${tag}${preview(entry.text)}`, async () => {
-                if (await this._call('CopyHistoryAsync', entry.id) !== null)
-                    Main.notify(APP_NAME, '已複製到剪貼簿');
-            });
-        }
+        if (!query)
+            this._hasHistory = history.length > 0;
+        this._showHistory(history, query);
 
         // 翻譯展開成每一種語言，方便把同一句話翻成好幾種
         this._redoMenu.menu.removeAll();
@@ -463,7 +529,84 @@ class DanwenIndicator extends PanelMenu.Button {
             for (const choice of choices)
                 this._addItem(this._redoMenu.menu, choice, () => this._redo(choice));
         }
-        this._redoMenu.visible = history.length > 0 && modes.length > 0;
+        this._redoMenu.visible = this._hasHistory && modes.length > 0;
+    }
+
+    async _fetchHistory(query) {
+        const [json] = query
+            ? await this._proxy.SearchHistoryAsync(query, HISTORY_ITEMS)
+            : await this._proxy.GetHistoryAsync(HISTORY_ITEMS);
+        return JSON.parse(json);
+    }
+
+    _showHistory(history, query) {
+        this._historyHeader.label.text = query ? '搜尋結果（點一下複製）' : '最近的聽寫（點一下複製）';
+        this._history.removeAll();
+        if (history.length === 0) {
+            const empty = query ? '（沒有符合的紀錄）' : '（還沒有紀錄）';
+            this._history.addMenuItem(new PopupMenu.PopupMenuItem(empty, {reactive: false}));
+        }
+        for (const entry of history) {
+            const tag = entry.mode ? `［${entry.mode}］` : '';
+            this._addItem(this._history, `${tag}${preview(entry.text)}`, async () => {
+                if (await this._call('CopyHistoryAsync', entry.id) !== null)
+                    Main.notify(APP_NAME, '已複製到剪貼簿');
+            });
+        }
+    }
+
+    _scheduleSearch() {
+        if (this._searchTimeoutId)
+            GLib.Source.remove(this._searchTimeoutId);
+        this._searchTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+            this._searchTimeoutId = 0;
+            this._searchHistory();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    async _searchHistory() {
+        if (!this._running || !this.menu.isOpen)
+            return;
+        const generation = ++this._historyGeneration;
+        const query = this._searchEntry.get_text().trim();
+        let history;
+        try {
+            history = await this._fetchHistory(query);
+        } catch (e) {
+            logError(e, `${APP_NAME}：搜尋歷史紀錄失敗`);
+            return;
+        }
+        if (generation === this._historyGeneration && this._icon)
+            this._showHistory(history, query);
+    }
+
+    // 子選單標題右邊的快捷鍵提示（標題常駐，提示文字在打開選單時更新）
+    _addHeaderHint(item) {
+        const hint = hintLabel();
+        item._triangleBin.x_expand = false;
+        item.insert_child_below(hint, item._triangleBin);
+        return hint;
+    }
+
+    _setHint(hint, text) {
+        hint.text = text;
+        hint.visible = Boolean(text);
+    }
+
+    async _installShortcuts() {
+        const danwen = GLib.build_filenamev([GLib.get_home_dir(), '.local', 'bin', 'danwen']);
+        try {
+            const proc = Gio.Subprocess.new([danwen, 'shortcuts', 'install'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE);
+            const [output] = await proc.communicate_utf8_async(null, null);
+            if (proc.get_successful())
+                Main.notify(APP_NAME, '已設定切換小紙條的快捷鍵', output.trim());
+            else
+                Main.notifyError(APP_NAME, output.trim());
+        } catch (e) {
+            Main.notifyError(APP_NAME, `無法設定快捷鍵：${e.message}`);
+        }
     }
 
     async _call(method, ...args) {
@@ -569,6 +712,8 @@ class DanwenIndicator extends PanelMenu.Button {
     }
 
     destroy() {
+        if (this._searchTimeoutId)
+            GLib.Source.remove(this._searchTimeoutId);
         this._cancellable.cancel();
         this._shellIface.unexport();
         Gio.bus_unown_name(this._overlayNameId);

@@ -33,3 +33,14 @@
 .danwen-osd-dot.processing {
   color: #e5a50a;
 }
+
+/* 選單裡的快捷鍵提示與搜尋框 */
+.danwen-shortcut {
+  color: #9a9996;
+  font-size: 0.9em;
+  padding-left: 16px;
+}
+
+.danwen-search {
+  margin: 0 6px;
+}
