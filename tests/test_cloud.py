@@ -41,7 +41,7 @@ def isolated_state(tmp_path, monkeypatch):
 def test_presets_and_validation():
     ep = cloud.resolve(CloudConfig())
     assert ep.base_url == "https://api.groq.com/openai/v1" and ep.asr_model == "whisper-large-v3-turbo"
-    assert ep.llm_extra == {"reasoning_effort": "low"}
+    assert ep.llm_extra == {"reasoning_effort": "none"}  # 預設 Qwen3.8：關掉思考
     with pytest.raises(ConfigError, match="account_id"):
         cloud.resolve(CloudConfig(provider="cloudflare"))
     cf = cloud.resolve(CloudConfig(provider="cloudflare", account_id="ACC"))
@@ -120,13 +120,13 @@ def test_cloud_refiner_groq_and_cloudflare(fake_http):
     assert cloud.make_refiner(cfg).refine("嗯，今天開會。", "日常") == "今天開會。"  # 去掉 <think>
     sent = json.loads(server.requests[-1]["body"])
     assert server.requests[-1]["path"] == GROQ_CHAT
-    assert sent["model"] == "openai/gpt-oss-20b" and sent["reasoning_effort"] == "low"
+    assert sent["model"] == "qwen/qwen3.8-27b" and sent["reasoning_effort"] == "none"
     assert server.requests[-1]["headers"]["Authorization"] == "Bearer key-groq"
 
     cfg.cloud = cloudflare(server.url)
     cloud.make_refiner(cfg).refine("嗯，今天開會。", "日常")
     assert server.requests[-1]["path"] == CF_CHAT
-    assert json.loads(server.requests[-1]["body"])["model"] == "@cf/qwen/qwen3-30b-a3b-fp8"
+    assert json.loads(server.requests[-1]["body"])["model"] == "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
 
 def test_cloud_refiner_does_not_send_context_by_default(fake_http):
@@ -284,3 +284,20 @@ def test_fixed_language_is_sent_when_configured(fake_http):
     server = fake_http({GROQ_ASR: (200, {"text": "今天開會。"})})
     CloudASRBackend(groq(server.url, asr_language="zh"), api_key=key).transcribe(AUDIO, 16000)
     assert b'name="language"\r\n\r\nzh' in server.requests[0]["body"]
+
+
+def test_model_choice_per_provider():
+    from danwen.config import CloudConfig
+
+    groq, cf = CloudConfig(provider="groq"), CloudConfig(provider="cloudflare", account_id="abc")
+    assert cloud.resolve(groq).llm_model == "qwen/qwen3.8-27b"
+    cloud.set_model("groq", "llm", "openai/gpt-oss-120b")
+    ep = cloud.resolve(groq)
+    assert ep.llm_model == "openai/gpt-oss-120b" and ep.llm_extra == {"reasoning_effort": "low"}
+    assert cloud.resolve(cf).llm_model == "@cf/meta/llama-3.3-70b-instruct-fp8-fast"  # 每家分開記
+    with pytest.raises(ConfigError, match="只能選"):
+        cloud.set_model("groq", "llm", "llama-3.3-70b-versatile")  # 已下架、不在選單裡
+    explicit = CloudConfig(provider="groq", llm_model="openai/gpt-oss-20b")  # 設定檔明確指定的優先
+    assert cloud.resolve(explicit).llm_model == "openai/gpt-oss-20b"
+    assert cloud.model_extra("groq", "openai/gpt-oss-999b") == {"reasoning_effort": "low"}
+    assert cloud.model_extra("cloudflare", "@cf/x") == {}

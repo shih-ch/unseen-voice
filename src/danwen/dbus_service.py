@@ -165,6 +165,44 @@ class _Interface(ServiceInterface):
         # LLM 整理要幾秒，丟到其他執行緒，不卡住 D-Bus
         return await self._loop.run_in_executor(None, self._call, self._daemon.redo, entry_id, mode)
 
+    # ---- 設定畫面 ----
+
+    @method()
+    def GetSettings(self) -> "s":  # JSON：values、hotkeys、restart_needed、api_keys（只有服務商名稱）等
+        return self._call(self._daemon.settings_json)
+
+    @method()
+    def SetSetting(self, key: "s", value_json: "s") -> "b":  # 回傳是否要重新啟動 danwen 才生效
+        return self._call(self._daemon.set_setting, key, value_json)
+
+    @method()
+    def ListModels(self) -> "s":  # JSON：{服務商: {label, kinds: {llm|asr: {choices, current}}}}
+        return self._call(self._daemon.models_json)
+
+    @method()
+    def SetModel(self, provider: "s", kind: "s", model: "s"):  # provider：groq、cloudflare、ollama
+        self._call(self._daemon.set_model, provider, kind, model)
+
+    @method()
+    async def TestModel(self, provider: "s") -> "s":  # 用固定的測試句整理一次：{seconds, output}
+        return await self._loop.run_in_executor(None, self._call, self._daemon.test_model, provider)
+
+    @method()
+    def GetDictionary(self) -> "s":  # JSON：{常錯的寫法: 正確寫法}
+        return self._call(self._daemon.dictionary_json)
+
+    @method()
+    def SetDictionaryEntry(self, wrong: "s", right: "s"):  # right 為空字串＝刪除
+        self._call(self._daemon.set_dictionary_entry, wrong, right)
+
+    @method()
+    async def DictSuggestions(self, use_llm: "b") -> "s":  # use_llm 會把最近的聽寫文字送給 LLM
+        return await self._loop.run_in_executor(None, self._call, self._daemon.dict_suggestions_json, use_llm)
+
+    @method()
+    def IgnoreSuggestion(self, wrong: "s", right: "s", source: "s"):
+        self._call(self._daemon.ignore_suggestion, wrong, right, source)
+
     @method()
     def StartLong(self):
         self._call(self._daemon.start_long)
@@ -180,6 +218,10 @@ class _Interface(ServiceInterface):
     @signal()
     def HistoryChanged(self):
         pass
+
+    @signal()
+    def Level(self, level, heard) -> "db":  # 錄音中每 0.1 秒：音量（0～1）、是否大於「沒講話」的門檻
+        return [level, heard]
 
 
 class DBusService:
@@ -247,6 +289,10 @@ class DBusService:
     def notify_history(self) -> None:
         if self._iface is not None:
             self._soon(self._iface.HistoryChanged)
+
+    def notify_level(self, level: float, heard: bool) -> None:
+        if self._iface is not None:
+            self._soon(self._iface.Level, float(level), bool(heard))
 
     def overlay_present(self, timeout: float = 0.5) -> bool:
         """GNOME extension 是否在執行（會在畫面上顯示錄音提示）。可從任何執行緒呼叫。"""

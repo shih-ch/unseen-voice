@@ -198,6 +198,9 @@ class StubRecorder:
     def start(self, source=None):
         self.sources.append(source)
 
+    def level(self):
+        return -30.0
+
     def stop(self):
         return np.zeros(0, np.float32)
 
@@ -208,7 +211,8 @@ def test_long_recording_notice_only_without_overlay(tmp_path, fake_llm, overlay,
     d.recorder = StubRecorder()
     notices = []
     d.feedback.info = notices.append
-    d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: overlay, "notify_state": lambda self: None})()
+    d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: overlay, "notify_state": lambda self: None,
+                                    "notify_level": lambda self, *a: None})()
     from danwen.hotkey import Action
 
     d._on_action(Action.START_LONG)
@@ -276,7 +280,8 @@ def test_bluetooth_mic_source_and_release(tmp_path, fake_llm):
     d.bt_mic = FakeBtMic("bluez_input.50_4F.0")
     states = []
     d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: True,
-                                   "notify_state": lambda self: states.append((d.state, d.kind))})()
+                                   "notify_state": lambda self: states.append((d.state, d.kind)),
+                                   "notify_level": lambda self, *a: None})()
     d._on_action(Action.START)
     assert ("recording", "preparing") in states  # 切換藍牙模式時先提示
     assert d.recorder.sources == ["bluez_input.50_4F.0"] and d.state == "recording" and d.kind == "fast"
@@ -297,3 +302,50 @@ def test_no_microphone_is_reported_and_stop_is_ignored(tmp_path, fake_llm):
     assert errors == ["找不到麥克風"] and d.state == "idle" and d.recorder.sources == []
     d._on_action(Action.STOP)  # 放開熱鍵：沒有錄音可處理
     assert d.state == "idle" and d._jobs.empty()
+
+
+def test_recorder_level():
+    from danwen.audio import Recorder
+
+    r = Recorder(16000)
+    assert r.level() == float("-inf")  # 還沒有聲音
+    r._chunks = [np.full(1600, 0.001, np.float32)]
+    quiet = r.level()
+    r._chunks.append(np.full(1600, 0.1, np.float32))
+    assert r.level() == pytest.approx(-20.0, abs=0.1) and quiet < -50  # 只看最近 0.1 秒
+
+
+def test_level_fraction():
+    from danwen.daemon import level_fraction
+
+    assert level_fraction(float("-inf")) == 0 and level_fraction(-60) == 0
+    assert level_fraction(-35) == pytest.approx(0.5) and level_fraction(0) == 1
+
+
+def test_levels_are_reported_while_recording(tmp_path, fake_llm):
+    from danwen.hotkey import Action
+
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d.recorder = StubRecorder()
+    levels = []
+    d.dbus = type("FakeDBus", (), {"overlay_present": lambda self: True, "notify_state": lambda self: None,
+                                   "notify_level": lambda self, level, heard: levels.append((level, heard))})()
+    d._on_action(Action.START)
+    time.sleep(0.35)
+    d._on_action(Action.STOP)
+    count = len(levels)
+    time.sleep(0.25)
+    assert count >= 2 and levels[0] == (pytest.approx(0.6), True)  # -30 dBFS：條長 0.6、有聲音
+    assert len(levels) == count  # 停止錄音後不再回報
+
+
+def test_noise_without_speech_is_not_transcribed(tmp_path, fake_llm):
+    d = make_daemon(tmp_path, fake_llm("x").url)
+    d.speech = type("NoSpeech", (), {"speech_seconds": lambda self, audio, sr: 0.0})()
+    notices = []
+    d.feedback.notice = notices.append
+    d._process(Job(np.full(32000, 0.1, np.float32), time.monotonic(), False))  # 2 秒，只有雜音
+    assert d.paster.pasted == [] and d.history.entries() == []
+    assert "沒有偵測到說話" in notices[0]
+    d._process(Job(np.full(9000, 0.1, np.float32), time.monotonic(), False))  # 0.56 秒：多半是誤觸，不通知
+    assert len(notices) == 1

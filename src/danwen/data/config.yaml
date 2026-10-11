@@ -25,6 +25,9 @@ audio:
   max_duration_s: 120.0
   # 音量低於這個值（dBFS）視為沒講話，不送辨識，避免 Whisper 幻覺
   silence_dbfs: -50.0
+  # 辨識前先用語音偵測（Silero VAD）確認有人在說話；沒有就略過，不會把雜音辨識成「我。」
+  # 說話很小聲常被略過時可以關閉
+  speech_check: true
 
 long_recording:
   # 很快連按兩下熱鍵開始長錄音（不必按著），再按一下結束、Esc 取消；需要 hotkey.double_tap_ms 大於 0

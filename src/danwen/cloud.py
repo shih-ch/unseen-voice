@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from .refine import Refiner
 
 STATE_FILE = paths.STATE_DIR / "cloud"
+MODELS_FILE = paths.STATE_DIR / "models.json"  # 每家服務商選用的模型（設定畫面或 danwen models set）
 
 
 class CloudError(RuntimeError):
@@ -42,14 +44,133 @@ class Preset:
 
 PRESETS = {
     # gpt-oss 是推理模型，推理強度設為 low，避免為了「想」多花時間與費用
-    "groq": Preset("Groq", "https://api.groq.com/openai/v1", "whisper-large-v3-turbo", "openai/gpt-oss-20b",
-                   "openai", llm_extra={"reasoning_effort": "low"}),
+    "groq": Preset("Groq", "https://api.groq.com/openai/v1", "whisper-large-v3-turbo", "qwen/qwen3.8-27b", "openai"),
     "openai": Preset("OpenAI", "https://api.openai.com/v1", "gpt-transcribe", "gpt-4o-mini", "openai"),
     "cloudflare": Preset("Cloudflare", "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai",
-                         "@cf/openai/whisper-large-v3-turbo", "@cf/qwen/qwen3-30b-a3b-fp8", "cloudflare",
+                         # 整理模型實測（2026-10-11）：llama-3.3-70b 6/6、平均 1 秒；qwen3-30b 6 次有 2 次被防呆擋下
+                         "@cf/openai/whisper-large-v3-turbo", "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "cloudflare",
                          llm_suffix="/v1"),
     "custom": Preset("自訂", "", "", "", "openai"),
 }
+
+
+@dataclass(frozen=True)
+class ModelChoice:
+    id: str
+    label: str
+    note: str = ""  # 實測結果，顯示在選單
+    extra: dict = field(default_factory=dict)  # 呼叫時附加的參數
+
+
+# 選單裡的模型：只列實測可用的（2026-10-11，日常 6 句 × 2 輪，Qwen 與 gpt-oss-120b 另測 Email／社群／翻譯 6 句）
+MODELS = {
+    "groq": {
+        "llm": [
+            # 思考型模型：關掉思考，不然偶爾會想太久（實測一次 30 秒逾時）
+            ModelChoice("qwen/qwen3.8-27b", "Qwen3.8 27B", "最快：實測 18/18、每句約 0.3 秒",
+                        {"reasoning_effort": "none"}),
+            ModelChoice("openai/gpt-oss-120b", "gpt-oss-120b", "實測 18/18、每句約 0.7 秒", {"reasoning_effort": "low"}),
+            ModelChoice("openai/gpt-oss-20b", "gpt-oss-20b", "實測 10/12，口誤修正加條列偶爾被防呆擋下",
+                        {"reasoning_effort": "low"}),
+        ],
+        # whisper-large-v3 實測比 turbo 慢、還漏字，不列
+        "asr": [ModelChoice("whisper-large-v3-turbo", "Whisper large-v3 turbo", "10 秒錄音約 0.5 秒")],
+    },
+    "cloudflare": {
+        # qwen3-30b 6 次有 2 次被擋、gpt-oss-20b 常沒有輸出、mistral-small 會把「好」翻成 Hello，都不列
+        "llm": [ModelChoice("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "Llama 3.3 70B", "實測 12/12、每句約 0.9 秒")],
+        "asr": [ModelChoice("@cf/openai/whisper-large-v3-turbo", "Whisper large-v3 turbo", "10 秒錄音約 1.8 秒")],
+    },
+}
+
+
+def model_choice(provider: str, kind: str, model: str) -> ModelChoice | None:
+    return next((m for m in MODELS.get(provider, {}).get(kind, []) if m.id == model), None)
+
+
+def model_extra(provider: str, model: str) -> dict:
+    """模型專屬的參數；不在清單裡的 gpt-oss 也設推理強度低。"""
+    choice = model_choice(provider, "llm", model)
+    if choice is not None:
+        return dict(choice.extra)
+    return {"reasoning_effort": "low"} if provider == "groq" and model.startswith("openai/gpt-oss") else {}
+
+
+def chosen_models() -> dict:
+    try:
+        data = json.loads(MODELS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def chosen_model(provider: str, kind: str) -> str | None:
+    value = chosen_models().get(provider, {})
+    return value.get(kind) if isinstance(value, dict) else None
+
+
+def set_model(provider: str, kind: str, model: str) -> None:
+    """選用某家服務商的模型（只能選選單裡的）。"""
+    if model_choice(provider, kind, model) is None:
+        options = "、".join(m.id for m in MODELS.get(provider, {}).get(kind, [])) or "無"
+        raise ConfigError(f"{provider} 的{'整理' if kind == 'llm' else '辨識'}模型只能選：{options}")
+    data = chosen_models()
+    data.setdefault(provider, {})[kind] = model
+    MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MODELS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+TEST_SENTENCE = "嗯，那個我們明天下午三點開會，不對，應該是四點，然後要討論兩件事，第一是預算，第二是人力。"
+
+
+def ollama_models(base_url: str) -> list[str]:
+    """本機 Ollama 已安裝的模型；Ollama 沒在執行時回傳空清單。"""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(base_url.rstrip("/") + "/api/tags", timeout=2) as r:
+            return sorted(m["name"] for m in json.load(r).get("models", []))
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def model_menu(cfg: Config) -> dict:
+    """設定畫面與 danwen models 用的選單：{服務商: {label, kinds: {llm|asr: {choices, current}}}}。"""
+    menu = {}
+    for provider, kinds in MODELS.items():
+        preset = PRESETS[provider]
+        menu[provider] = {"label": preset.label, "kinds": {
+            kind: {
+                "choices": [dataclasses.asdict(m) for m in choices],
+                "current": chosen_model(provider, kind) or (preset.llm_model if kind == "llm" else preset.asr_model),
+            } for kind, choices in kinds.items()
+        }}
+    installed = ollama_models(cfg.refine.base_url) if cfg.refine.provider == "ollama" else []
+    if cfg.refine.model not in installed:
+        installed.insert(0, cfg.refine.model)
+    menu["ollama"] = {"label": "本機 Ollama", "kinds": {"llm": {
+        "choices": [{"id": m, "label": m, "note": "預設" if m == "qwen3:4b-instruct-2507-q4_K_M" else "", "extra": {}}
+                    for m in installed],
+        "current": cfg.refine.model,
+    }}}
+    return menu
+
+
+def test_model(cfg: Config, provider: str, post=None) -> tuple[float, str]:
+    """用一句固定的測試句整理一次，回傳（秒數, 結果）。provider：groq、cloudflare 或 ollama。"""
+    import time
+
+    from .refine import Refiner
+
+    if provider == "ollama":
+        refiner = Refiner(cfg.refine)
+    else:
+        active = resolve_plan(cfg.cloud, provider)
+        check_ready(active.cloud)
+        refiner = make_refiner(cfg, active.cloud)
+    start = time.monotonic()
+    output = refiner.refine(TEST_SENTENCE, "日常", post=post)
+    return time.monotonic() - start, output
 
 
 @dataclass(frozen=True)
@@ -76,8 +197,9 @@ def resolve(cfg: CloudConfig) -> Endpoint:
         base = base.format(account_id=cfg.account_id)
     if not base:
         raise ConfigError("provider 為 custom 時需要設定 cloud.base_url")
-    asr_model = cfg.asr_model or preset.asr_model
-    llm_model = cfg.llm_model or preset.llm_model
+    # 設定檔明確指定的優先（自訂方案用），其次是選單選的，最後是預設
+    asr_model = cfg.asr_model or chosen_model(cfg.provider, "asr") or preset.asr_model
+    llm_model = cfg.llm_model or chosen_model(cfg.provider, "llm") or preset.llm_model
     if not asr_model or not llm_model:
         raise ConfigError("provider 為 custom 時需要設定 cloud.asr_model 與 cloud.llm_model")
     return Endpoint(
@@ -88,7 +210,7 @@ def resolve(cfg: CloudConfig) -> Endpoint:
         llm_model=llm_model,
         asr_api=preset.asr_api,
         llm_base_url=base + preset.llm_suffix,
-        llm_extra=dict(preset.llm_extra),
+        llm_extra={**preset.llm_extra, **model_extra(cfg.provider, llm_model)},
     )
 
 

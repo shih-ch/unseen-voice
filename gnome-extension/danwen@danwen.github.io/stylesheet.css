@@ -34,6 +34,24 @@
   color: #e5a50a;
 }
 
+/* 錄音時的音量條（寬度與 extension.js 的 METER_WIDTH 相同） */
+.danwen-osd-meter {
+  width: 48px;
+  height: 6px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.danwen-osd-meter-fill {
+  height: 6px;
+  border-radius: 3px;
+  background-color: #57e389;
+}
+
+.danwen-osd-meter-fill.quiet {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
 /* 選單裡的快捷鍵提示與搜尋框 */
 .danwen-shortcut {
   color: #9a9996;

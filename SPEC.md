@@ -137,7 +137,7 @@
 - 服務商：groq、openai、cloudflare、custom（任何 OpenAI 相容服務）
   - 辨識：OpenAI 相容 `/audio/transcriptions`（multipart）；Cloudflare `/ai/run/@cf/openai/whisper-large-v3-turbo`（JSON＋base64）；
     預設不指定語言（自動判斷）——實測固定 zh 時整句英文會被硬翻成中文
-  - 整理：OpenAI 相容 chat；Cloudflare 走 `/ai/v1/chat/completions`；去除推理模型的 `<think>`；Groq gpt-oss 設 reasoning_effort=low
+  - 整理：OpenAI 相容 chat；Cloudflare 走 `/ai/v1/chat/completions`；去除推理模型的 `<think>`；模型專屬參數見「模型選擇」（gpt-oss：reasoning_effort=low；Qwen3.8：none）
   - 一律帶 `User-Agent: danwen/版本`：Groq 前面的 Cloudflare 會擋 Python 預設 UA（error 1010）
 - 切換：extension「方案」子選單、`danwen cloud <方案>`；切換前檢查設定與金鑰（不連線），缺少就不切換並說明原因
 - 錄音開始時決定這次整理走 cloud／local／none：方案要雲端但不能用（缺金鑰等）時，
@@ -214,8 +214,8 @@
    - 同時加上快捷鍵提示：extension 從 GSettings 讀 danwen- 開頭的自訂快捷鍵（先確認 schema 存在，否則 Gio.Settings 會讓
      GNOME Shell 當掉），在小紙條、子選單標題旁顯示按鍵；還沒設定時選單有「設定切換小紙條的快捷鍵」，執行 danwen shortcuts install
    - install.sh 執行 `danwen shortcuts update`：設定過才更新（新增項目、改過的指令），沒設定過只提示，不動 GNOME 設定
-3. 設定畫面（中～大）：extension 的設定頁（prefs.js），在「擴充功能」App 裡就能改
-4. 字典自動產生規則（中）：例如從使用者改過的整理結果找出常錯的詞，建議加進字典
+3. ✅ 設定畫面（2026-10-11）：見下方「設定畫面」
+4. ✅ 字典自動產生規則（2026-10-11）：`danwen dict suggest [--llm] [--yes]`（見下方「字典建議」）
 5. 螢幕內容當上下文（大）：截圖＋文字辨識；送雲端前要讓使用者先確認內容，隱私風險最高，最後再考慮
 
 其他待辦：方案 D（Cloudflare）待使用者填 account_id、設定金鑰後實測，再決定整理用的模型
@@ -239,6 +239,63 @@
   服務沒安裝（ServiceUnknown）或沒回應時改用內建；NoMicrophone 錯誤照常通知。
   規則：預設輸入是麥克風不切；記錄借用者，全部歸還幾秒後才切回；只切回自己切的、且沒有其他程式在用藍牙麥克風；
   手動切到免持不自動切回，借用中手動切回 A2DP 會等借用結束。內建版也會在其他程式還在錄藍牙麥克風時延後切回
+
+## 字典建議（2026-10-11）
+- 來源（suggest.py）：
+  - 重講：相鄰兩筆 ≤ 90 秒、去標點後相似度 ≥ 0.6、各 ≥ 3 字；以字（中文）／單字（英文）比對，取被替換的詞，
+    只換一個中文字時連同相鄰相同的字湊成詞；不知道哪次對，雙向（使用者選）
+  - 整理前後：整理過的紀錄 raw 與 text 的替換；排除翻譯（postprocess: false 的小紙條）、
+    口誤修正（改成的詞本來就在 raw 裡，或 raw 有「不對／應該是」）
+  - LLM（選用）：最近 20 筆 raw 交給 Refiner.chat（依方案，B＝Groq）；要求 JSON [{wrong,right,reason}]，
+    wrong 必須逐字出現在紀錄裡才採用（避免 LLM 編造）；送出前說明送到哪裡並詢問，非互動時要 --yes
+- 共同過濾：只差標點、大小寫、數字寫法（三點／3 點）的不算；中文一字、英文一詞算一個單位，wrong ≤ 6、right ≤ 8
+- 合併重複、去掉字典已有的；「不要再提」存在 ~/.local/state/danwen/dict-ignored.json
+- 互動（終端機）：重講 [1]/[2] 選方向、其他 [y]；[s] 跳過、[n] 不要再提；非互動時列出 danwen dict add 指令
+- 實測使用者紀錄：重講抓到「月風／嶽風」「籤島／前島」；Groq 對合成句子找出 無邦圖→Ubuntu、酷伯內提斯→Kubernetes
+- Refiner 抽出 chat(messages) 給整理與字典建議共用
+
+## 模型選擇（2026-10-11）
+- cloud.MODELS：每家服務商的選單（整理 llm／辨識 asr），每個模型附實測說明與專屬參數（ModelChoice.extra）；只列實測可用的
+- 選擇存在 ~/.local/state/danwen/models.json（每家分開，切方案不會帶錯）；resolve() 的優先順序：
+  設定檔 cloud.llm_model／asr_model（自訂方案用）→ 選單選的 → 預設；llm_extra 依模型（不在清單的 gpt-oss 也設 low）
+- 本機 Ollama：選單列出已安裝的模型（/api/tags），選了寫進 config 的 refine.model（馬上生效）
+- 預設改為 Groq qwen/qwen3.8-27b（reasoning_effort none）、Cloudflare @cf/meta/llama-3.3-70b-instruct-fp8-fast
+- 實測（日常 6 句 × 2 輪）：Groq Qwen3.8 12/12 0.3 秒、gpt-oss-120b 12/12 0.7 秒、gpt-oss-20b 10/12；
+  Cloudflare llama-3.3-70b 12/12 0.9 秒、mistral-small 10/12（「好」→ Hello）、qwen3-30b 4/6、gpt-oss-20b 2/6；
+  Groq 的 llama-3.3-70b、qwen3-32b 已下架（404）。Qwen3.8 不關思考時有一次 30 秒逾時
+- Cloudflare 辨識加 vad_filter：不加時靜音＋提示詞會被「辨識」成「作詞・作曲・編曲 李宗盛」
+- `danwen models [list|set|test]`；D-Bus ListModels／SetModel／TestModel；設定畫面「整理」頁的「模型」區（含測試按鈕）
+
+## 辨識前的語音偵測（2026-10-11）
+- 使用者回報：麥克風沒收到人聲時常輸出「我。」（藍牙喇叭免持麥克風的雜音高於音量門檻，SenseVoice 吐出「我。」「。」）；
+  雲端 Whisper 遇到靜音也會編出「詞曲 李宗盛」「Thank you for watching!」
+- speech.SpeechDetector（Silero VAD，min_speech 0.1 秒）：辨識前檢查，偵測不到說話就略過、不上傳；錄音 ≥ 1 秒時通知
+  「沒有偵測到說話，沒有貼上（請檢查麥克風）」；偵測失敗時照常辨識
+- 實測：全零、白雜音 -45／-30 dBFS、100 Hz 嗡嗡聲都判為 0 秒；10 秒說話判為 6.2 秒；每次 2～35 毫秒
+- 設定 audio.speech_check（預設開，設定畫面「錄音」頁可關），說話很小聲常被略過時關閉
+
+## 設定畫面（2026-10-11）
+- extension 的 prefs.js（Adw，GNOME 46／libadwaita 1.5），六頁：一般、錄音、整理、字典、快捷鍵、紀錄；
+  頂列選單加「設定…」（Extension.openPreferences）
+- 與 extension 共用 common.js（D-Bus 介面定義、讀取 danwen- 快捷鍵）；設定畫面在另一個程式執行，不能用 Shell 模組
+- 透過 D-Bus：GetSettings（values、熱鍵選項、要重新啟動的項目、哪些服務商有金鑰、LLM 送到哪裡）、
+  SetSetting(key, JSON) → 是否要重新啟動、GetDictionary／SetDictionaryEntry（right 空白＝刪除）、
+  DictSuggestions(use_llm)、IgnoreSuggestion；方案、小紙條、翻譯語言沿用 SetPlan／SetMode／SetLanguage
+- settings.py：可改的項目清單（SETTINGS：型別、能不能馬上生效）；write() 只改 config.yaml 那一行（保留行尾註解，
+  沒有就加在區段最後或檔尾），寫完重新載入檢查，有錯還原
+- daemon：馬上生效的（提示音、藍牙麥克風、依程式調整；refine.* 與 long_recording.refine 每次使用時才讀）直接套用；
+  其他與啟動時的值比較，不同才要求重新啟動（改回原值就不用）
+- API 金鑰只顯示有沒有設定；輸入仍在終端機（danwen key set），不經過設定畫面
+- 測試：settings 的寫入與還原、daemon 套用、D-Bus 方法；headless 檢查用 DANWEN_PREFS_PAGE 開指定頁面截圖
+  （測試環境要用 UpdateActivationEnvironment 把 WAYLAND_DISPLAY 交給 D-Bus，設定畫面才開得出視窗）
+- 測試隔離補上 credentials.KeyringStore（讀設定時會查哪些服務商有金鑰）
+
+## 錄音提示的音量條（2026-10-11）
+- Recorder.level()：最近 0.1 秒的 dBFS（錄音執行緒同時 append，只讀最後幾段）
+- 錄音期間（有 D-Bus 時）每 0.1 秒送 D-Bus 訊號 `Level(d 音量 0～1, b 是否大於 audio.silence_dbfs)`；
+  -60 dBFS 以下是 0、-10 dBFS 以上是 1；回報執行緒出錯只記錄，不影響錄音
+- extension：錄音提示在紅點後加音量條（48px，有聲音綠色、太小聲灰色）；錄了 3 秒都沒聽到聲音時加上
+  「沒有收到聲音，請檢查麥克風」；用訊號而非屬性，避免每 0.1 秒觸發整個選單重算
 
 ## 之後再考慮
 - fcitx5 addon 直接送字：不經剪貼簿、終端機可用，並可用 preedit 做串流即時顯示

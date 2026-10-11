@@ -156,10 +156,31 @@ log 只記錄用了哪些來源、各幾個字，不記錄內容。若輸出的�
 | 方案 | 語音辨識 | 整理模式 | 費用（個人用量） |
 |---|---|---|---|
 | A `local` 全部本機 | 本機 SenseVoice | 本機 Ollama | 免費 |
-| **B `hybrid` 本機辨識＋Groq 整理（預設）** | 本機 SenseVoice | ☁ Groq gpt-oss-20b | Groq 免費額度內 0 元 |
+| **B `hybrid` 本機辨識＋Groq 整理（預設）** | 本機 SenseVoice | ☁ Groq Qwen3.8 27B | Groq 免費額度內 0 元 |
 | C `groq` 全部用 Groq | ☁ Groq whisper-large-v3-turbo | ☁ Groq | 免費額度內 0 元 |
-| D `cloudflare` 全部用 Cloudflare | ☁ @cf/openai/whisper-large-v3-turbo | ☁ @cf/qwen/qwen3-30b-a3b-fp8（待實測） | 每天約 214 分鐘免費 |
+| D `cloudflare` 全部用 Cloudflare | ☁ @cf/openai/whisper-large-v3-turbo | ☁ @cf/meta/llama-3.3-70b-instruct-fp8-fast | 每天約 214 分鐘免費 |
 | E `custom` 自訂 | 依設定檔 `cloud` 區段 | 依設定檔 | |
+
+整理用的模型可以換（設定畫面的「整理」頁，或 `danwen models`），每家服務商分開記，只列實測可用的。
+2026-10-11 同一組句子（口誤修正加條列、要求寫詩、中英夾雜、夾帶指令、口語、單字）各跑兩輪的結果：
+
+| 服務商 | 模型 | 正確 | 每句 | |
+|---|---|---|---|---|
+| Groq | **Qwen3.8 27B**（預設） | 12/12 | 0.3 秒 | Email、社群、翻譯日文另測 6/6；要關掉思考，不然偶爾想太久 |
+| Groq | gpt-oss-120b | 12/12 | 0.7 秒 | Email、社群、翻譯日文另測 6/6 |
+| Groq | gpt-oss-20b | 10/12 | 0.6 秒 | 口誤修正加條列那句兩次被防呆擋下 |
+| Cloudflare | **Llama 3.3 70B**（預設） | 12/12 | 0.9 秒 | |
+
+沒列進選單的：Cloudflare 的 qwen3-30b（6 次有 2 次被擋）、gpt-oss-20b（常沒有輸出）、mistral-small（把「好」翻成 Hello）；
+Groq 的 llama-3.3-70b、qwen3-32b 已經下架。辨識兩家都用 Whisper large-v3 turbo：10 秒錄音 Groq 約 0.5 秒、
+Cloudflare 約 1.8 秒（Groq 的 large-v3 比 turbo 慢、還漏字）。
+
+```bash
+danwen models                              # 各家的模型與實測結果，＊是目前用的
+danwen models set groq openai/gpt-oss-120b # 換模型（立即生效）
+danwen models set ollama qwen2.5:7b-instruct-q4_K_M   # 本機 Ollama：列出你已安裝的模型
+danwen models test cloudflare              # 用一句固定的句子實際整理一次
+```
 
 - **B 為預設**：快速模式的錄音不離開電腦，只有整理模式的文字會送到 Groq
 - **雲端不能用時**（還沒設定金鑰、斷網、超過用量）：預設**貼上原文，不喚醒本機 Ollama**（省下約 3 GB 記憶體與載入等待），
@@ -215,7 +236,20 @@ danwen dict                          # 列出
 danwen dict add 肉type ZeroType       # 常錯的寫法 → 正確寫法
 danwen dict add Kubernetes           # 只加專有名詞（整理模式的 LLM 會參考）
 danwen dict remove 肉type
+danwen dict suggest                  # 從歷史紀錄找可能聽錯的詞，一組一組問你要不要加
+danwen dict suggest --llm            # 另外請 LLM 看最近 20 筆（會先告訴你送到哪裡、問你要不要送）
 ```
+
+`dict suggest` 的建議有三種來源，**都要你確認才會加進字典**：
+
+- **重講**：90 秒內把同一句再講一次，兩次不一樣的地方（例如「籤島」和「前島」）。不知道哪次才對，由你選方向
+- **整理前後**：整理模式把詞改掉的地方。翻譯和口誤修正（「三點，不對，四點」）不算
+- **LLM**（`--llm`）：找出同音字、被聽成中文的英文或專有名詞（例如「無邦圖」→「Ubuntu」）。
+  會把最近的聽寫文字送給整理用的 LLM（方案 B 是雲端 Groq），所以只在你加 `--llm` 時才做
+
+選「不要再提」的組合以後不會再出現。設定畫面的「字典」頁也能直接按按鈕加入：
+
+<img src="docs/screenshots/prefs-dictionary.png" width="600" alt="設定畫面的字典頁：建議（籤島↔前島）與字典的詞條">
 
 ## 指令
 
@@ -256,13 +290,34 @@ journalctl --user -u danwen -f   # 即時看紀錄（含每次聽寫的各階段
 （截圖由 `SHOTS=docs/screenshots dev/headless-check.sh` 在隔離的 GNOME Shell 裡產生，內容是假資料）
 
 - 圖示：待命、錄音（紅）、辨識整理中（黃「…」）、danwen 未執行（灰）
-- 選單：開始／結束／取消長錄音、方案（本機／雲端）、切換小紙條、翻譯成（英文、日文、簡體中文）、
+- 選單：開始／結束／取消長錄音、方案（本機／雲端）、設定…、切換小紙條、翻譯成（英文、日文、簡體中文）、
   搜尋歷史紀錄、最近 5 筆（點一下複製）、換小紙條重新整理最新一筆（翻譯展開成各語言，可把同一句翻成好幾種）、
   開啟設定檔／替換字典／小紙條資料夾
 - 選單裡顯示切換小紙條的快捷鍵（例如「日常　Super+Alt+1」「小紙條　下一張 Super+Alt+M」）
 - 告訴 danwen 目前是哪個程式（只有程式代號與視窗類別，不含視窗標題），讓它調整貼法與小紙條
 - 錄音時畫面上方中央的小提示：「● 錄音中 0:03 · 整理：日常」「● 長錄音 1:25 · 再按一下 右 Ctrl 結束，Esc 取消」
   「… 整理中（日常）」；這次錄音或文字會送到雲端時，前面加「☁」
+- 提示裡的音量條：有收到聲音是綠色，太小聲是灰色；錄了 3 秒都沒收到聲音會提示「沒有收到聲音，請檢查麥克風」
+  （例如沒有麥克風、錄到的是喇叭播放的聲音）
+
+### 設定畫面
+
+在「擴充功能」App 點 danwen 的齒輪，或頂列選單的「設定…」打開：
+
+<img src="docs/screenshots/prefs-general.png" width="600" alt="設定畫面：方案、小紙條、翻譯成、提示音">
+
+| 分頁 | 內容 |
+|---|---|
+| 一般 | 方案、目前的小紙條、翻譯成、提示音、錯誤通知 |
+| 錄音 | 熱鍵、長錄音、藍牙耳機／喇叭的麥克風 |
+| 整理 | 雲端不能用時改用本機、上下文、依目前的程式調整、API 金鑰有沒有設定 |
+| 字典 | 字典建議（點「用『前島』」或「加入」就加進字典）、請 LLM 一起找、字典的詞條 |
+| 快捷鍵 | 目前的快捷鍵，設定或移除 |
+| 紀錄 | 保留幾筆、要不要保存錄音、清除全部紀錄 |
+
+- 改了直接寫進 `~/.config/danwen/config.yaml` 的那一行，你寫的註解都保留
+- 大多數設定馬上生效；熱鍵、長錄音、歷史筆數要重新啟動 danwen，會出現「重新啟動」按鈕
+- API 金鑰只顯示有沒有設定，仍然要在終端機用 `danwen key set` 輸入，不經過設定畫面
 
 目前只宣告支援 GNOME 46；GNOME 升級後若不相容會自動停用，聽寫本身不受影響。
 
@@ -319,7 +374,7 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 | 上下文 | 剪貼簿、選取文字、螢幕內容、目前的 App | 剪貼簿、選取文字（預設關閉，也預設不送雲端）；目前的程式只用來選貼法與小紙條，不送給 LLM |
 | 依程式調整 | Word、Outlook 改用模擬打字 | 終端機改送 Ctrl+Shift+V，也可設定特定程式自動換小紙條；模擬打字在 GNOME Wayland 打不出中文，改為只放進剪貼簿 |
 | 語音指令 | 有（預設關閉） | 不做：讓 LLM 執行系統動作，可能被文字裡夾帶的指令誘導 |
-| 設定 | 設定畫面 | 頂列選單＋YAML 設定檔 |
+| 設定 | 設定畫面 | 設定畫面（常用項目）、頂列選單、YAML 設定檔 |
 
 ## 路線圖
 
@@ -328,8 +383,8 @@ uninstall.sh 依 `~/.local/state/danwen/install-manifest` 只還原 install.sh �
 1. ✅ **依目前的程式調整**：終端機改送 Ctrl+Shift+V，也可設定特定程式自動換小紙條（見「依目前的程式調整」）。
    模擬打字在 GNOME Wayland 打不出中文，改為 `paste: none`
 2. ✅ **歷史搜尋**：`danwen history search`，頂列選單也有搜尋框
-3. **設定畫面**：做成 extension 的設定頁，在「擴充功能」App 裡就能改，不用編 YAML
-4. **字典自動產生規則**：從你改過的整理結果找出常錯的詞，建議加進字典
+3. ✅ **設定畫面**：extension 的設定頁（見「設定畫面」）
+4. ✅ **字典自動產生規則**：`danwen dict suggest`，從重講、整理前後與 LLM 找出可能聽錯的詞，確認後加進字典
 5. **螢幕內容當上下文**：送到雲端前會先讓你確認內容
 
 另外，方案 D（Cloudflare）的整理模型還在等實測。
@@ -343,6 +398,7 @@ uv run danwen -v run      # 前景執行（先 systemctl --user stop danwen）
 dev/nested-shell.sh       # 在視窗裡跑隔離的 GNOME Shell 測試 extension（搭配假的 danwen，不影響目前的桌面）
 DANWEN_FAKE_CYCLE=1 dev/nested-shell.sh   # 假 danwen 自動輪流切換狀態，看圖示變色
 dev/headless-check.sh     # 在看不見的 GNOME Shell 裡自動打開選單、操作翻譯與滾輪並印出結果（不跳視窗）
+DANWEN_PREFS_PAGE=dictionary dev/headless-check.sh   # 同上，打開設定畫面的某一頁（加 SHOTS=資料夾 會截圖）
 dev/test-keyring.sh       # 在完全隔離的 GNOME 鑰匙圈裡測金鑰存取（不碰真正的鑰匙圈）
 ```
 

@@ -15,11 +15,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-const APP_NAME = '但聞人語';
-const BUS_NAME = 'io.github.danwen';
+import {APP_NAME, BUS_NAME, DanwenProxy, OBJECT_PATH, shortcutHints} from './common.js';
+
 // 持有這個名稱表示畫面上會顯示錄音提示，danwen 就不再另外跳系統通知
 const OVERLAY_BUS_NAME = 'io.github.danwen.ShellOverlay';
-const OBJECT_PATH = '/io/github/danwen';
 // 在 OVERLAY_BUS_NAME 下提供目前的程式給 danwen（決定貼上用的按鍵、要不要換小紙條）。
 // 只回報程式代號與視窗類別，不回報視窗標題；danwen 只在開始整理錄音與貼上時查詢
 const SHELL_OBJECT_PATH = '/io/github/danwen/Shell';
@@ -31,53 +30,6 @@ const SHELL_IFACE_XML = `
     </method>
   </interface>
 </node>`;
-const IFACE_XML = `
-<node>
-  <interface name="io.github.danwen.Daemon1">
-    <property name="State" type="s" access="read"/>
-    <property name="Kind" type="s" access="read"/>
-    <property name="Mode" type="s" access="read"/>
-    <property name="ModeLabel" type="s" access="read"/>
-    <property name="Language" type="s" access="read"/>
-    <property name="RecordingMode" type="s" access="read"/>
-    <property name="RecordingModeByApp" type="b" access="read"/>
-    <property name="Hotkey" type="s" access="read"/>
-    <property name="Plan" type="s" access="read"/>
-    <property name="PlanTitle" type="s" access="read"/>
-    <property name="Cloud" type="b" access="read"/>
-    <property name="CloudAsr" type="b" access="read"/>
-    <property name="CloudRefine" type="b" access="read"/>
-    <property name="CloudProvider" type="s" access="read"/>
-    <method name="ListPlans"><arg type="a(ss)" direction="out"/></method>
-    <method name="SetPlan"><arg type="s" name="name" direction="in"/></method>
-    <method name="ListModes"><arg type="a(ss)" direction="out"/></method>
-    <method name="SetMode"><arg type="s" name="name" direction="in"/></method>
-    <method name="CycleMode">
-      <arg type="i" name="step" direction="in"/><arg type="s" direction="out"/>
-    </method>
-    <method name="ListLanguages"><arg type="as" direction="out"/></method>
-    <method name="SetLanguage"><arg type="s" name="language" direction="in"/></method>
-    <method name="GetHistory">
-      <arg type="i" name="limit" direction="in"/><arg type="s" direction="out"/>
-    </method>
-    <method name="SearchHistory">
-      <arg type="s" name="query" direction="in"/><arg type="i" name="limit" direction="in"/>
-      <arg type="s" direction="out"/>
-    </method>
-    <method name="CopyHistory">
-      <arg type="i" name="entry_id" direction="in"/><arg type="s" direction="out"/>
-    </method>
-    <method name="Redo">
-      <arg type="i" name="entry_id" direction="in"/><arg type="s" name="mode" direction="in"/>
-      <arg type="s" direction="out"/>
-    </method>
-    <method name="StartLong"/>
-    <method name="Stop"/>
-    <method name="Cancel"/>
-    <signal name="HistoryChanged"/>
-  </interface>
-</node>`;
-const DanwenProxy = Gio.DBusProxy.makeProxyWrapper(IFACE_XML);
 
 const STATE_LABELS = {idle: '待命中', recording: '錄音中', processing: '辨識、整理中…'};
 const KIND_LABELS = {fast: '快速', refine: '整理', long: '長錄音', preparing: '準備麥克風'};
@@ -93,37 +45,8 @@ const KEY_NAMES = {
     KEY_CAPSLOCK: 'Caps Lock', KEY_SCROLLLOCK: 'Scroll Lock', KEY_PAUSE: 'Pause', KEY_COMPOSE: 'Menu',
 };
 const HISTORY_ITEMS = 5;
-const MEDIA_KEYS = 'org.gnome.settings-daemon.plugins.media-keys';
 
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
-
-// 「<Super><Alt>m」→「Super+Alt+M」
-function bindingLabel(binding) {
-    const mods = [...binding.matchAll(/<(\w+)>/g)].map(m => ({Primary: 'Ctrl', Control: 'Ctrl'})[m[1]] ?? m[1]);
-    const key = binding.replace(/<\w+>/g, '');
-    return [...mods, key.length === 1 ? key.toUpperCase() : key].join('+');
-}
-
-// 讀出 danwen shortcuts install 建立的 GNOME 快捷鍵：「mode:日常」「mode:next」「translate:next」→ 按鍵
-function shortcutHints() {
-    const hints = new Map();
-    const source = Gio.SettingsSchemaSource.get_default();
-    // 找不到 schema 時建立 Gio.Settings 會讓整個 GNOME Shell 當掉，先確認
-    if (!source?.lookup(MEDIA_KEYS, true) || !source.lookup(`${MEDIA_KEYS}.custom-keybinding`, true))
-        return hints;
-    for (const path of new Gio.Settings({schema_id: MEDIA_KEYS}).get_strv('custom-keybindings')) {
-        if (!/\/danwen-[^/]+\/$/.test(path))
-            continue;
-        const settings = new Gio.Settings({schema_id: `${MEDIA_KEYS}.custom-keybinding`, path});
-        const binding = settings.get_string('binding');
-        // 指令最後是「mode 日常」「mode '會議記錄'」「translate next」（中文會加上引號）
-        const match = settings.get_string('command').match(/\s(mode|translate)\s+(?:'([^']*)'|(\S+))\s*$/);
-        if (binding && match)
-            hints.set(`${match[1]}:${match[2] ?? match[3]}`, bindingLabel(binding));
-    }
-    return hints;
-}
-
 // 選單項目右邊的快捷鍵提示
 function hintLabel(text = '') {
     return new St.Label({
@@ -153,6 +76,9 @@ function errorMessage(error) {
     return error.message;
 }
 
+const METER_WIDTH = 48; // 音量條的寬度（與 stylesheet.css 的 .danwen-osd-meter 相同）
+const NO_SOUND_HINT_S = 3; // 錄了幾秒都沒收到聲音就提示檢查麥克風
+
 function formatElapsed(microseconds) {
     const total = Math.floor(microseconds / 1_000_000);
     return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
@@ -164,9 +90,15 @@ class DanwenOsd extends St.BoxLayout {
     _init() {
         super._init({style_class: 'danwen-osd', reactive: false, visible: false, opacity: 0});
         this._dot = new St.Label({style_class: 'danwen-osd-dot', y_align: Clutter.ActorAlign.CENTER});
+        // 音量條：有聲音是綠色，小於「當作沒講話」的門檻是灰色
+        this._meter = new St.Widget({style_class: 'danwen-osd-meter', y_align: Clutter.ActorAlign.CENTER});
+        this._meterFill = new St.Widget({style_class: 'danwen-osd-meter-fill quiet', width: 0});
+        this._meter.add_child(this._meterFill);
         this._label = new St.Label({style_class: 'danwen-osd-label', y_align: Clutter.ActorAlign.CENTER});
         this.add_child(this._dot);
+        this.add_child(this._meter);
         this.add_child(this._label);
+        this._everHeard = false;
         this._state = 'idle';
         this._since = 0;
         this._timerId = 0;
@@ -177,8 +109,12 @@ class DanwenOsd extends St.BoxLayout {
         this._hotkey = hotkey;
         this._cloud = cloud;
         this._byApp = byApp;
-        if (state === 'recording' && this._state !== 'recording')
+        if (state === 'recording' && (this._state !== 'recording' || this._kind === 'preparing') &&
+            kind !== 'preparing') {
             this._since = GLib.get_monotonic_time();
+            this._everHeard = false;
+            this.setLevel(0, false);
+        }
         this._state = state;
         this._kind = kind;
         this._mode = mode;
@@ -200,7 +136,22 @@ class DanwenOsd extends St.BoxLayout {
         }
     }
 
+    // danwen 每 0.1 秒送來的音量（0～1）
+    setLevel(level, heard) {
+        this._meterFill.width = Math.round(METER_WIDTH * Math.min(Math.max(level, 0), 1));
+        if (heard) {
+            this._meterFill.remove_style_class_name('quiet');
+            if (!this._everHeard && this._state === 'recording') {
+                this._everHeard = true;
+                this._render(); // 收掉「沒有收到聲音」的提示
+            }
+        } else {
+            this._meterFill.add_style_class_name('quiet');
+        }
+    }
+
     _render() {
+        this._meter.visible = this._state === 'recording' && this._kind !== 'preparing';
         if (this._kind === 'preparing') {
             // 藍牙耳機／喇叭切到免持模式中（約 1～2 秒），切好會響提示音
             this._dot.text = '…';
@@ -226,6 +177,10 @@ class DanwenOsd extends St.BoxLayout {
             this._label.text = `${where}錄音中 ${elapsed}　·　整理：${this._mode}${this._byApp ? '（依目前的程式）' : ''}`;
         else
             this._label.text = `${where}錄音中 ${elapsed}`;
+        // 錄了幾秒都沒收到聲音：多半是沒有麥克風，或錄到的是喇叭播放的聲音
+        const seconds = (GLib.get_monotonic_time() - this._since) / 1_000_000;
+        if (recording && !this._everHeard && seconds >= NO_SOUND_HINT_S)
+            this._label.text += '　·　沒有收到聲音，請檢查麥克風';
         this._position();
     }
 
@@ -280,8 +235,9 @@ class DanwenOsd extends St.BoxLayout {
 
 const DanwenIndicator = GObject.registerClass(
 class DanwenIndicator extends PanelMenu.Button {
-    _init() {
+    _init(extension) {
         super._init(0.0, APP_NAME);
+        this._extension = extension;
         this._icon = new St.Icon({style_class: 'system-status-icon'});
         this.add_child(this._icon);
 
@@ -332,6 +288,8 @@ class DanwenIndicator extends PanelMenu.Button {
                 if (this.menu.isOpen)
                     this._refreshLists();
             });
+            this._levelSignalId = proxy.connectSignal('Level',
+                (_proxy, _sender, [level, heard]) => this._osd?.setLevel(level, heard));
             this._sync();
         }, this._cancellable, Gio.DBusProxyFlags.DO_NOT_AUTO_START);
 
@@ -390,6 +348,7 @@ class DanwenIndicator extends PanelMenu.Button {
         this._addItem(this.menu, '開啟設定檔', () => this._open(GLib.build_filenamev([dir, 'config.yaml'])));
         this._addItem(this.menu, '開啟替換字典', () => this._open(GLib.build_filenamev([dir, 'replacements.yaml'])));
         this._addItem(this.menu, '開啟小紙條資料夾', () => this._open(GLib.build_filenamev([dir, 'prompts'])));
+        this._addItem(this.menu, '設定…', () => this._extension.openPreferences());
     }
 
     // 依目前狀態更新圖示、狀態列與長錄音按鈕（只用快取的屬性，不呼叫 D-Bus）
@@ -724,6 +683,8 @@ class DanwenIndicator extends PanelMenu.Button {
                 this._proxy.disconnect(id);
             if (this._historySignalId)
                 this._proxy.disconnectSignal(this._historySignalId);
+            if (this._levelSignalId)
+                this._proxy.disconnectSignal(this._levelSignalId);
             this._proxy = null;
         }
         this._icon = null;
@@ -733,7 +694,7 @@ class DanwenIndicator extends PanelMenu.Button {
 
 export default class DanwenExtension extends Extension {
     enable() {
-        this._indicator = new DanwenIndicator();
+        this._indicator = new DanwenIndicator(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 

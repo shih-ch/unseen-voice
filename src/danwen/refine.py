@@ -340,7 +340,14 @@ class Refiner:
         if context and not self.context_allowed():
             log.warning("LLM 服務不在本機且未開啟 context_to_cloud，不送出上下文")
             context = None
-        messages = prompt.messages(text, terms, context)
+        output = self.chat(prompt.messages(text, terms, context))
+        check_output(text, output, prompt.check_language)
+        if post is not None and prompt.postprocess:
+            output = post(output)
+        return output
+
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        """送出對話、取回 LLM 的回覆（去掉思考過程與行尾空白）。整理模式與字典建議共用。"""
         if self.cfg.provider == "ollama":
             result = self._post(
                 f"{self.base_url}/api/chat",
@@ -365,11 +372,7 @@ class Refiner:
                 raise RefineError(f"LLM 回應格式不對：{str(result)[:200]}") from e
         # 推理模型可能把思考過程放在 <think> 裡；也去掉行尾空白（模型常為了 Markdown 換行加兩個空白）
         output = _THINK_RE.sub("", output)
-        output = "\n".join(line.rstrip() for line in output.strip().splitlines())
-        check_output(text, output, prompt.check_language)
-        if post is not None and prompt.postprocess:
-            output = post(output)
-        return output
+        return "\n".join(line.rstrip() for line in output.strip().splitlines())
 
     def _api_key(self) -> str:
         if self._api_key_getter is not None:

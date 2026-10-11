@@ -8,6 +8,8 @@
 #      SHOTS=docs/screenshots dev/headless-check.sh  改為截圖（README 用的圖）
 #      SIZE=1600x1000 SCALE=1 dev/headless-check.sh  螢幕大小與縮放（截圖預設 2560x2048、2 倍，介面用繁體中文）
 #      VERBOSE=1 dev/headless-check.sh               顯示 GNOME Shell 的完整輸出（除錯用）
+#      DANWEN_PREFS_PAGE=dictionary dev/headless-check.sh  打開設定畫面的某一頁（general、recording、refine、
+#                                                          dictionary、shortcuts、history）；加 SHOTS 會截圖
 #      DANWEN_NO_SHORTCUTS=1 dev/headless-check.sh   不預先設定快捷鍵，測選單裡的「設定快捷鍵」
 set -euo pipefail
 
@@ -29,6 +31,11 @@ export XDG_CURRENT_DESKTOP=GNOME
 export DANWEN_REPO="$REPO" DANWEN_PYTHON="$PYTHON" DANWEN_UUID="$UUID" DANWEN_PROBE="$PROBE"
 export DANWEN_FILTER="PROBE|JS ERROR|JS WARNING|$UUID"
 [ -n "${VERBOSE:-}" ] && DANWEN_FILTER="."
+# 設定畫面（GTK 程式）：測試環境沒有桌面服務（portal），不關掉的話要等很久才開出視窗
+export GDK_DEBUG=no-portals GTK_USE_PORTAL=0 ADW_DISABLE_PORTAL=1
+# 隔離環境裡其他服務的雜訊預設丟掉；VERBOSE 時保留（設定畫面的錯誤也在這裡）
+ERR_OUT=/dev/null
+[ -n "${VERBOSE:-}" ] && ERR_OUT=/dev/stderr
 if [ -n "${SHOTS:-}" ]; then
     mkdir -p "$SHOTS"
     DANWEN_PROBE_SHOTS="$(cd "$SHOTS" && pwd)"
@@ -51,9 +58,9 @@ dbus-run-session -- bash -c '
     fi
     "$DANWEN_PYTHON" "$DANWEN_REPO/dev/fake_danwen.py" > "$XDG_STATE_HOME/fake.log" 2>&1 &
     FAKE=$!
-    timeout 60 gnome-shell --headless --virtual-monitor "$DANWEN_SIZE" --mode=user 2>&1 |
+    timeout 100 gnome-shell --headless --virtual-monitor "$DANWEN_SIZE" --mode=user 2>&1 |
         grep -E "$DANWEN_FILTER" | sed -E "s/^.*PROBE ?//" || true
     kill $FAKE 2>/dev/null || true
     echo "── 假的 danwen 收到的操作 ──"
     grep -E "切換|方案" "$XDG_STATE_HOME/fake.log" || true
-' 2>/dev/null
+' 2>"$ERR_OUT"

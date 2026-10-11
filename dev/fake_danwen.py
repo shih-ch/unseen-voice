@@ -108,6 +108,70 @@ class FakeDaemon:
         found = [e for e in self.history if all(w in e["text"].casefold() for w in words)]
         return json.dumps(found[: limit or None], ensure_ascii=False)
 
+    # ---- 設定畫面 ----
+
+    def settings_json(self):
+        from danwen import cloud, settings
+
+        if not hasattr(self, "values"):
+            self.values = {"hotkey.key": "KEY_RIGHTCTRL", "feedback.sounds": True, "feedback.notify_errors": True,
+                           "long_recording.enabled": True, "long_recording.refine": False,
+                           "audio.speech_check": True, "audio.bluetooth_mic": True, "audio.bluetooth_restore_s": 5.0,
+                           "refine.local_fallback": False, "refine.context_clipboard": False,
+                           "refine.context_selection": False, "refine.context_to_cloud": False,
+                           "output.app_rules": True, "history.size": 20, "history.keep_audio": False}
+            self.restart = set()
+        return json.dumps({"values": self.values, "hotkeys": settings.HOTKEYS, "restart_needed": sorted(self.restart),
+                           "api_keys": ["groq"], "providers": {k: p.label for k, p in cloud.PRESETS.items()},
+                           "llm_target": "雲端 Groq", "config_path": "~/.config/danwen/config.yaml",
+                           "apps_path": "~/.config/danwen/apps.yaml",
+                           "dictionary_path": "~/.config/danwen/replacements.yaml"}, ensure_ascii=False)
+
+    def set_setting(self, key, value_json):
+        from danwen import settings
+
+        self.settings_json()
+        self.values[key] = settings.coerce(key, json.loads(value_json))
+        if not settings.SETTINGS[key].live:
+            self.restart.add(key)
+        print(f"設定：{key} = {self.values[key]}", flush=True)
+        return bool(self.restart)
+
+    def models_json(self):
+        from danwen import cloud, config
+
+        return json.dumps(cloud.model_menu(config.Config()), ensure_ascii=False)
+
+    def set_model(self, provider, kind, model):
+        print(f"模型：{provider} {kind} = {model}", flush=True)
+
+    def test_model(self, provider):
+        return json.dumps({"seconds": 0.31, "output": "我們明天下午四點開會。"}, ensure_ascii=False)
+
+    def dictionary_json(self):
+        if not hasattr(self, "dictionary"):
+            self.dictionary = {"臺": "台", "肉type": "ZeroType", "Kubernetes": "Kubernetes"}
+        return json.dumps(self.dictionary, ensure_ascii=False)
+
+    def set_dictionary_entry(self, wrong, right):
+        self.dictionary_json()
+        if right:
+            self.dictionary[wrong] = right
+        else:
+            self.dictionary.pop(wrong, None)
+        print(f"字典：{wrong} → {right or '（刪除）'}", flush=True)
+
+    def dict_suggestions_json(self, use_llm):
+        items = [{"wrong": "籤島", "right": "前島", "source": "重講", "two_way": True, "entries": [61, 62],
+                  "reason": "", "examples": ["你上次有提過怎麼修改籤島城市？", "你上次有提過要怎麼修改前島城市？"]}]
+        if use_llm:
+            items.append({"wrong": "無邦圖", "right": "Ubuntu", "source": "LLM", "two_way": False, "entries": [48],
+                          "reason": "作業系統名稱", "examples": ["如何在無邦圖，不要讓藍牙喇叭斷線？"]})
+        return json.dumps(items, ensure_ascii=False)
+
+    def ignore_suggestion(self, wrong, right, source):
+        print(f"不要再提：{wrong} / {right}", flush=True)
+
     def copy_history(self, entry_id):
         entry = next((e for e in self.history if e["id"] == entry_id), self.history[0] if entry_id == 0 else None)
         if entry is None:
@@ -125,6 +189,17 @@ class FakeDaemon:
         if self.state == "idle":
             self.manual.set()
             self.set_state("recording", "long")
+            threading.Thread(target=self._fake_levels, daemon=True).start()
+
+    def _fake_levels(self):
+        """模擬說話的音量起伏（約 0.4～0.8）。"""
+        import math
+
+        t = 0
+        while self.state == "recording":
+            self.service.notify_level(0.6 + 0.2 * math.sin(t / 2), True)
+            t += 1
+            time.sleep(0.1)
 
     def stop_recording(self):
         if self.state == "recording":

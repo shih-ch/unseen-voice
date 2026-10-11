@@ -21,7 +21,16 @@ def isolate_user_environment(tmp_path, monkeypatch):
         raise cloud.CloudError("測試中不讀真正的鑰匙圈")
 
     monkeypatch.setattr(cloud, "api_key", no_keyring)
+
+    from danwen import credentials
+
+    class NoKeyring:
+        def __init__(self, *args, **kwargs):
+            raise credentials.CredentialError("測試中不讀真正的鑰匙圈")
+
+    monkeypatch.setattr(credentials, "KeyringStore", NoKeyring)
     monkeypatch.setattr(cloud, "STATE_FILE", tmp_path / "isolated" / "cloud")
+    monkeypatch.setattr(cloud, "MODELS_FILE", tmp_path / "isolated" / "models.json")
     monkeypatch.setattr(refine, "MODE_FILE", tmp_path / "isolated" / "mode")
     monkeypatch.setattr(refine, "LANGUAGE_FILE", tmp_path / "isolated" / "language")
     monkeypatch.setattr(paths, "HISTORY_DIR", tmp_path / "isolated" / "history")
@@ -29,6 +38,15 @@ def isolate_user_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CONFIG_FILE", tmp_path / "isolated" / "config" / "config.yaml")
     monkeypatch.setattr(paths, "REPLACEMENTS_FILE", tmp_path / "isolated" / "config" / "replacements.yaml")
     monkeypatch.setattr(paths, "APPS_FILE", tmp_path / "isolated" / "config" / "apps.yaml")
+    from danwen import suggest
+
+    monkeypatch.setattr(suggest, "IGNORED_FILE", tmp_path / "isolated" / "dict-ignored.json")
+
+    # 語音偵測：不載入真的模型；測試用的假錄音一律當作有說話（要測略過的測試自己換掉）
+    from danwen import speech
+
+    monkeypatch.setattr(speech.SpeechDetector, "prepare", lambda self: None)
+    monkeypatch.setattr(speech.SpeechDetector, "speech_seconds", lambda self, audio, sr: audio.size / sr)
     monkeypatch.setattr(refine, "USER_PROMPTS_DIR", tmp_path / "isolated" / "config" / "prompts")
 
     def fake_pactl(*args):

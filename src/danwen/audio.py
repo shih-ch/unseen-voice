@@ -52,6 +52,19 @@ class Recorder:
             log.debug("錄音狀態：%s", status)
         self._chunks.append(indata[:, 0].copy())
 
+    def level(self, window_s: float = 0.1) -> float:
+        """最近一小段錄音的音量（dBFS），給錄音提示的音量條用；還沒有聲音時為 -inf。"""
+        need = max(int(self.sample_rate * window_s), 1)
+        recent, total = [], 0
+        for chunk in reversed(self._chunks[-50:]):  # 錄音執行緒同時在 append，只讀最後幾段
+            recent.append(chunk)
+            total += chunk.size
+            if total >= need:
+                break
+        if not recent:
+            return float("-inf")
+        return dbfs(np.concatenate(recent[::-1])[-need:])
+
     def stop(self) -> np.ndarray:
         stream, self._stream = self._stream, None
         if stream is not None:

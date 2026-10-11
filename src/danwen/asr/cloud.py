@@ -61,7 +61,8 @@ class CloudASRBackend(ASRBackend):
         headers = {"Authorization": f"Bearer {key}"}
         try:
             if endpoint.asr_api == "cloudflare":
-                payload = {"audio": base64.b64encode(wav).decode(), "initial_prompt": self._prompt()}
+                # vad_filter：略過無聲段落；不開的話，靜音加上提示詞會被「辨識」成「作詞・作曲・編曲 …」
+                payload = {"audio": base64.b64encode(wav).decode(), "initial_prompt": self._prompt(), "vad_filter": True}
                 if self.cfg.asr_language:
                     payload["language"] = self.cfg.asr_language
                 body = json.dumps(payload).encode()

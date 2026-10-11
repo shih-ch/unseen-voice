@@ -66,6 +66,26 @@ class StubDaemon:
             raise ConfigError(f"找不到小紙條「{name}」")
         self.mode = name
 
+    def settings_json(self):
+        return json.dumps({"values": {"feedback.sounds": True}})
+
+    def set_setting(self, key, value_json):
+        if key != "feedback.sounds":
+            raise ConfigError(f"設定畫面不能改「{key}」")
+        return False
+
+    def dictionary_json(self):
+        return json.dumps({"臺": "台"}, ensure_ascii=False)
+
+    def set_dictionary_entry(self, wrong, right):
+        self.calls.append(f"dict {wrong}={right}")
+
+    def dict_suggestions_json(self, use_llm):
+        return json.dumps([{"wrong": "籤島", "right": "前島", "llm": use_llm}], ensure_ascii=False)
+
+    def ignore_suggestion(self, wrong, right, source):
+        self.calls.append(f"ignore {wrong}/{right}/{source}")
+
     def history_json(self, limit):
         return json.dumps([{"id": 2, "text": "第二句"}, {"id": 1, "text": "第一句"}][: limit or None], ensure_ascii=False)
 
@@ -266,3 +286,39 @@ def test_recording_mode_is_sent_with_state(service):
         return changes
 
     assert asyncio.run(scenario())[0]["RecordingMode"] == "Email"
+
+
+def test_level_signal(service):
+    name, daemon, svc = service
+
+    async def scenario():
+        bus, iface, _ = await connect(name)
+        got = asyncio.Event()
+        received = []
+        iface.on_level(lambda level, heard: (received.append((level, heard)), got.set()))
+        await asyncio.sleep(0.1)
+        svc.notify_level(0.42, True)
+        await asyncio.wait_for(got.wait(), 2)
+        bus.disconnect()
+        return received
+
+    assert asyncio.run(scenario()) == [(pytest.approx(0.42), True)]
+
+
+def test_settings_methods(service):
+    name, daemon, _ = service
+
+    async def scenario():
+        bus, iface, _ = await connect(name)
+        assert json.loads(await iface.call_get_settings())["values"]["feedback.sounds"] is True
+        assert await iface.call_set_setting("feedback.sounds", "false") is False
+        with pytest.raises(DBusError, match="不能改"):
+            await iface.call_set_setting("cloud.account_id", '"x"')
+        assert json.loads(await iface.call_get_dictionary()) == {"臺": "台"}
+        await iface.call_set_dictionary_entry("無邦圖", "Ubuntu")
+        assert json.loads(await iface.call_dict_suggestions(True))[0]["llm"] is True
+        await iface.call_ignore_suggestion("籤島", "前島", "重講")
+        bus.disconnect()
+
+    asyncio.run(scenario())
+    assert daemon.calls == ["dict 無邦圖=Ubuntu", "ignore 籤島/前島/重講"]

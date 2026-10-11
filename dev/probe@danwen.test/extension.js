@@ -124,11 +124,55 @@ async function screenshots(indicator) {
     await shot('osd-switch', [osd], {pad: 40, fromTop: false});
 }
 
+// 設定畫面：從頂列選單的「設定…」打開（DANWEN_PREFS_PAGE 指定頁面），等視窗出現後截圖或印出標題
+async function prefsWindow(indicator) {
+    // 設定畫面由 D-Bus 啟動；測試環境沒有 gnome-session 幫忙，要自己告訴 D-Bus 畫面在哪裡
+    const env = {};
+    for (const name of ['WAYLAND_DISPLAY', 'DISPLAY', 'XDG_CURRENT_DESKTOP', 'GDK_DEBUG', 'ADW_DISABLE_PORTAL']) {
+        const value = GLib.getenv(name);
+        if (value)
+            env[name] = value;
+    }
+    Gio.DBus.session.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+        'UpdateActivationEnvironment', new GLib.Variant('(a{ss})', [env]), null, Gio.DBusCallFlags.NONE, -1, null);
+    Main.overview.hide();
+    await wait(800);
+    indicator.menu.open();
+    await wait(1200);
+    const item = indicator.menu._getMenuItems().find(i => i.label?.text === '設定…');
+    if (!item) {
+        out('選單裡沒有「設定…」');
+        return;
+    }
+    item.activate(null);
+    let win = null;
+    const started = GLib.get_monotonic_time();
+    for (let i = 0; i < 120 && !win; i++) {
+        await wait(500);
+        win = global.get_window_actors().map(a => a.meta_window)
+            .find(w => (w.get_wm_class() ?? '').includes('Extensions'));
+    }
+    if (!win) {
+        out('設定視窗沒有出現；目前的視窗：',
+            JSON.stringify(global.get_window_actors().map(a => a.meta_window.get_wm_class())));
+        return;
+    }
+    out(`設定視窗 ${((GLib.get_monotonic_time() - started) / 1e6).toFixed(1)} 秒後出現`);
+    await wait(3000); // 等設定畫面向 danwen 讀完資料
+    out(`設定視窗：${win.get_title()}`);
+    if (GLib.getenv('DANWEN_PROBE_SHOTS'))
+        await shot(`prefs-${GLib.getenv('DANWEN_PREFS_PAGE')}`, [win.get_compositor_private()], {pad: 0, fromTop: false});
+}
+
 async function run() {
     await wait(4000);
     const indicator = Main.panel.statusArea[UUID];
     if (!indicator) {
         out('找不到 danwen 的頂列圖示');
+        return;
+    }
+    if (GLib.getenv('DANWEN_PREFS_PAGE')) {
+        await prefsWindow(indicator);
         return;
     }
     if (GLib.getenv('DANWEN_PROBE_SHOTS')) {
@@ -182,6 +226,20 @@ async function run() {
     out('換小紙條重新整理（翻譯（簡體中文））完成');
 
     await openAndDump(indicator, '操作後');
+
+    // 音量條：假的 danwen 長錄音時會送出模擬的音量
+    await indicator._call('StartLongAsync');
+    await wait(1200);
+    const osd = indicator._osd;
+    out('錄音中的音量條：', osd._meter.visible ? '顯示' : '隱藏', `寬 ${osd._meterFill.width}／48`,
+        osd._meterFill.has_style_class_name('quiet') ? '灰色' : '綠色');
+    osd._everHeard = false; // 模擬錄了 4 秒都沒收到聲音
+    osd._since -= 4_000_000;
+    osd._render();
+    out('沒收到聲音時的提示：', osd._label.text);
+    await indicator._call('CancelAsync');
+    await wait(500);
+    out('取消後的錄音提示：', osd.visible ? '顯示' : '隱藏');
 
     Main.overview.hide();
     await wait(800);

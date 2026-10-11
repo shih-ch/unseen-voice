@@ -41,7 +41,7 @@ def cmd_run(args: argparse.Namespace, cfg: config.Config) -> int:
     from .hotkey import NoKeyboardError
 
     try:
-        daemon = Daemon(cfg)
+        daemon = Daemon(cfg, args.config or paths.CONFIG_FILE)
         daemon.run()
     except (NoKeyboardError, AlreadyRunning, PermissionError, config.ConfigError, ValueError) as e:
         msg = str(e)
@@ -220,6 +220,8 @@ def cmd_dict(args: argparse.Namespace, cfg: config.Config) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(paths.DATA_DIR / "replacements.yaml", path)
     words = args.words
+    if args.action == "suggest":
+        return _dict_suggest(args, cfg, path)
     if args.action == "add":
         if len(words) not in (1, 2):
             print("用法：danwen dict add 正確寫法　或　danwen dict add 常錯的寫法 正確寫法", file=sys.stderr)
@@ -243,6 +245,83 @@ def cmd_dict(args: argparse.Namespace, cfg: config.Config) -> int:
     for wrong, right in table.entries().items():
         mark = "＊" if right in terms else "  "
         print(f"  {mark}{right}" if wrong == right else f"  {mark}{wrong} → {right}")
+    return 0
+
+
+def _dict_suggest(args: argparse.Namespace, cfg: config.Config, path: Path) -> int:
+    from . import cloud, suggest
+    from .history import History
+    from .postprocess import Replacements, edit_replacements
+    from .refine import RefineError
+
+    history = History(size=cfg.history.size, keep_audio=cfg.history.keep_audio)
+    entries = list(reversed(history.entries()))  # 舊的在前
+    by_id = {e.id: e for e in entries}
+
+    found = suggest.collect(entries)
+    if args.llm:
+        try:
+            refiner, where = cloud.choose_refiner(cfg)
+        except cloud.CloudError as e:
+            print(f"無法使用 LLM：{e}", file=sys.stderr)
+            return 1
+        count = min(len(entries), suggest.LLM_ENTRIES)
+        print(f"會把最近 {count} 筆聽寫的文字送到{where}的 LLM，只用來找聽錯的詞。")
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print("確認要送出的話加上 --yes", file=sys.stderr)
+                return 2
+            if input("要送出嗎？[y/N] ").strip().lower() != "y":
+                print("沒有送出")
+                return 0
+        try:
+            found += suggest.from_llm(entries, refiner)
+        except RefineError as e:
+            print(f"LLM 沒有回應：{e}", file=sys.stderr)
+    items = suggest.merge(found, Replacements(path).entries())
+    if not items:
+        hint = "" if args.llm else "；也可以請 LLM 一起找：danwen dict suggest --llm"
+        print(f"目前沒有建議（看過最近 {len(entries)} 筆紀錄）{hint}")
+        return 0
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    added = 0
+    for i, s in enumerate(items, 1):
+        where = "、".join(f"#{n}" for n in s.entries)
+        if s.two_way:
+            print(f"\n{i}/{len(items)}  「{s.wrong}」和「{s.right}」：{where} 重講時不一樣")
+        else:
+            why = f"LLM：{s.reason}" if s.source == "LLM" and s.reason else f"{s.source}時改的" if s.source == "整理" else "LLM"
+            print(f"\n{i}/{len(items)}  「{s.wrong}」→「{s.right}」（{why}；出現在 {where}）")
+        for n in s.entries[:3]:
+            if n in by_id:
+                print(f"      #{n}：{by_id[n].raw[:60]}")
+        if not interactive:
+            print(f"      加進字典：danwen dict add {s.wrong} {s.right}")
+            if s.two_way:
+                print(f"      （「{s.wrong}」才對的話：danwen dict add {s.right} {s.wrong}）")
+            continue
+        try:
+            if s.two_way:
+                answer = input(f"  [1] 以後「{s.wrong}」改成「{s.right}」　[2] 以後「{s.right}」改成「{s.wrong}」"
+                               "　[s] 先跳過　[n] 不要再提：").strip().lower()
+            else:
+                answer = input("  [y] 加進字典　[s] 先跳過　[n] 不要再提：").strip().lower()
+        except EOFError:
+            break
+        if answer in ("1", "y"):
+            edit_replacements(path, s.wrong, s.right)
+        elif answer == "2" and s.two_way:
+            edit_replacements(path, s.right, s.wrong)
+        elif answer == "n":
+            suggest.ignore(s)
+            continue
+        else:
+            continue
+        added += 1
+        print("  ✓ 已加進字典")
+    if interactive:
+        print(f"\n加了 {added} 筆；字典存檔即生效" if added else "\n字典沒有變更")
     return 0
 
 
@@ -501,6 +580,42 @@ def cmd_cloud(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def cmd_models(args: argparse.Namespace, cfg: config.Config) -> int:
+    from . import cloud, settings
+    from .refine import RefineError
+
+    try:
+        if args.action == "set":
+            if len(args.args) not in (2, 3):
+                print("用法：danwen models set 服務商 [llm|asr] 模型（服務商：groq、cloudflare、ollama）", file=sys.stderr)
+                return 2
+            provider, *rest = args.args
+            kind, model = rest if len(rest) == 2 else ("llm", rest[0])
+            if provider == "ollama":
+                settings.write(args.config or paths.CONFIG_FILE, "refine.model", model)
+                print(f"本機 Ollama 的整理模型改用 {model}（重新啟動 danwen 後生效：systemctl --user restart danwen）")
+            else:
+                cloud.set_model(provider, kind, model)
+                print(f"{cloud.PRESETS[provider].label} 的{'整理' if kind == 'llm' else '辨識'}模型改用 {model}（立即生效）")
+            return 0
+        if args.action == "test":
+            provider = args.args[0] if args.args else "groq"
+            seconds, output = cloud.test_model(cfg, provider, _postprocessor(cfg))
+            print(f"[{provider}，{seconds:.2f} 秒]\n{output}")
+            return 0
+    except (cloud.CloudError, RefineError, config.ConfigError) as e:
+        print(f"失敗：{e}", file=sys.stderr)
+        return 1
+    for provider, info in cloud.model_menu(cfg).items():
+        for kind, menu in info["kinds"].items():
+            print(f"{info['label']} 的{'整理' if kind == 'llm' else '辨識'}模型：")
+            for m in menu["choices"]:
+                mark = "＊" if m["id"] == menu["current"] else "  "
+                print(f"  {mark}{m['id']:44} {m['note']}")
+    print("\n切換：danwen models set groq openai/gpt-oss-120b　測試：danwen models test groq（會實際呼叫）")
+    return 0
+
+
 def cmd_shortcuts(args: argparse.Namespace, cfg: config.Config) -> int:
     from .shortcuts import SHORTCUTS, ShortcutError, Shortcuts, danwen_command
 
@@ -602,9 +717,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--context", help="模擬剪貼簿內容，測試上下文的效果")
     p.add_argument("--cloud", action="store_true", help="強制用目前方案的雲端 LLM（預設依方案）")
     p.add_argument("--local", action="store_true", help="強制用本機 Ollama（預設依方案）")
-    p = sub.add_parser("dict", help="列出、新增、刪除替換字典的詞條")
-    p.add_argument("action", nargs="?", choices=("list", "add", "remove"), default="list")
+    p = sub.add_parser("dict", help="替換字典：列出、新增、刪除，以及從歷史紀錄建議常聽錯的詞（suggest）")
+    p.add_argument("action", nargs="?", choices=("list", "add", "remove", "suggest"), default="list")
     p.add_argument("words", nargs="*", help="add：[常錯的寫法] 正確寫法；remove：詞條")
+    p.add_argument("--llm", action="store_true", help="suggest：另外請 LLM 看最近的紀錄（會送出文字，先詢問）")
+    p.add_argument("--yes", action="store_true", help="suggest --llm：不詢問直接送出")
     p = sub.add_parser("history", help="歷史紀錄：列出、搜尋、查看、複製、重聽、換小紙條重新整理")
     p.add_argument("action", nargs="?", choices=("list", "search", "show", "copy", "redo", "play", "clear"),
                    default="list")
@@ -612,6 +729,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-m", "--mode", help="redo 使用的小紙條（預設為目前模式；翻譯可寫「日文」）")
     p = sub.add_parser("apps", help="依目前的程式調整貼法與小紙條：列出規則、查目前的程式")
     p.add_argument("--delay", type=int, default=0, help="幾秒後再讀取目前的程式（讓你先切到要查的視窗）")
+    p = sub.add_parser("models", help="整理與辨識用的模型：列出、切換、測試（每家服務商分開記）")
+    p.add_argument("action", nargs="?", choices=("list", "set", "test"), default="list")
+    p.add_argument("args", nargs="*", help="set：服務商 [llm|asr] 模型；test：服務商（groq、cloudflare、ollama）")
     p = sub.add_parser("cloud", help="方案（本機／雲端）：查看、切換、實測連線")
     p.add_argument("action", nargs="?", default="status",
                    help="status、test、on（預設方案）、off（全部本機），或方案名稱／代號：local/A、hybrid/B、groq/C、cloudflare/D、custom/E")
@@ -645,6 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         "dict": cmd_dict,
         "history": cmd_history,
         "apps": cmd_apps,
+        "models": cmd_models,
         "cloud": cmd_cloud,
         "key": cmd_key,
         "shortcuts": cmd_shortcuts,

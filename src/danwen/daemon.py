@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import cloud
+from . import cloud, paths, settings, suggest
 from .apps import DEFAULT_PASTE, AppRules, FocusedApp
 from .asr import ASRUnavailable, create_backend
 from .asr.cloud import CloudASRBackend
@@ -29,6 +29,7 @@ from .history import History, redo_entry
 from .hotkey import Action, HoldDetector, KeyboardListener, display_name, key_code
 from .output import VKBD_NAME, Clipboard, Paster
 from .postprocess import PostProcessor
+from .speech import SpeechDetector
 from . import refine
 from .refine import RefineError, Refiner, available_prompts, current_mode, load_prompt, mode_label
 
@@ -45,9 +46,16 @@ class Job:
     mode: str = ""  # 錄音開始時決定的小紙條（可能依目前的程式自動換）；空白＝處理時再讀目前的
 
 
+def level_fraction(level_dbfs: float) -> float:
+    """音量條的長度（0～1）：-60 dBFS 以下是空的，-10 dBFS 以上是滿的。"""
+    return min(1.0, max(0.0, (level_dbfs + 60) / 50))
+
+
 class Daemon:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, config_path: Path | None = None):
         self.cfg = cfg
+        self.config_path = config_path or paths.CONFIG_FILE
+        self._started_values = settings.values(cfg)  # 要重新啟動才生效的設定，跟啟動時比較
         self.feedback = Feedback(cfg.feedback.sounds, cfg.feedback.notify_errors)
         self.recorder = Recorder(cfg.audio.sample_rate, cfg.audio.device)
         # 使用者自己指定了麥克風就不切換藍牙模式
@@ -55,6 +63,8 @@ class Daemon:
         # 有安裝 bt-audio-profile 的協調服務就透過它借用（透過 danwen 的 D-Bus 連線），沒有就用內建的
         self.bt_mic = BluetoothMic(cfg.audio.bluetooth_restore_s, remote=lambda: self.dbus) if use_bt else None
         self._recording_ok = False
+        self.speech = SpeechDetector() if cfg.audio.speech_check else None
+        self._level_token = 0  # 換一次錄音就換一個，舊的音量回報執行緒會自己結束
         self.backend = create_backend(cfg.asr.backend, cfg)
         replacements = cfg.postprocess.replacements
         self.post = PostProcessor(
@@ -131,6 +141,12 @@ class Daemon:
         t = time.monotonic()
         self.backend.prepare()
         log.info("ASR backend %s 就緒（%.1f 秒）", self.backend.name, time.monotonic() - t)
+        if self.speech is not None:
+            try:
+                self.speech.prepare()
+            except Exception as e:  # 沒有語音偵測照樣能聽寫，只是雜音可能被辨識成字
+                log.warning("語音偵測無法使用，略過這項檢查：%s", e)
+                self.speech = None
         self.paster = Paster(self.cfg.output.restore_clipboard, self.cfg.output.restore_delay_ms)
         worker = threading.Thread(target=self._worker, name="dictation", daemon=True)
         worker.start()
@@ -187,6 +203,7 @@ class Daemon:
             mode, by_app = self._choose_mode() if self._refining else ("", False)
             self.recording_mode, self.recording_mode_by_app = mode, by_app
             self._set_state("recording", "long" if long else "refine" if self._refining else "fast")
+            self._start_level_reports()
             self.feedback.start(refine=self._refining, long=long)
             # 有 GNOME extension 時畫面上已有錄音提示，不再另外跳通知
             if long and not (self.dbus and self.dbus.overlay_present()):
@@ -210,6 +227,25 @@ class Daemon:
             self.recording_mode, self.recording_mode_by_app = "", False
             self._set_state("idle")
             log.info("錄音已取消（組合鍵或 Esc）")
+
+    def _start_level_reports(self) -> None:
+        """錄音期間每 0.1 秒把音量送給 GNOME extension（畫面上的音量條）；沒有 extension 時不送。"""
+        if self.dbus is None:
+            return
+        self._level_token += 1
+        token = self._level_token
+
+        def report() -> None:
+            silence = self.cfg.audio.silence_dbfs
+            try:
+                while token == self._level_token and self.state == "recording" and not self._stop.is_set():
+                    level = self.recorder.level()
+                    self.dbus.notify_level(level_fraction(level), level >= silence)
+                    time.sleep(0.1)
+            except Exception:  # 音量條只是輔助，出錯也不能影響錄音
+                log.debug("回報音量失敗", exc_info=True)
+
+        threading.Thread(target=report, name="level", daemon=True).start()
 
     def _worker(self) -> None:
         while (job := self._jobs.get()) is not None:
@@ -244,6 +280,23 @@ class Daemon:
         if context:
             log.info("上下文：%s", "、".join(f"{k} {len(v)} 字" for k, v in context.items()))
         return context or None
+
+    def _has_speech(self, audio: np.ndarray, sr: int, duration: float) -> bool:
+        """語音偵測：只有雜音（藍牙免持麥克風、環境聲）時不辨識，免得 SenseVoice 吐出「我。」、雲端編出字幕。
+        偵測失敗時當作有說話，不影響聽寫。"""
+        if self.speech is None:
+            return True
+        try:
+            spoken = self.speech.speech_seconds(audio, sr)
+        except Exception:
+            log.exception("語音偵測失敗，照常辨識")
+            return True
+        if spoken > 0:
+            return True
+        log.info("錄音 %.1f 秒，沒有偵測到說話，略過", duration)
+        if duration >= 1.0:  # 很短的多半是誤觸，不必通知
+            self.feedback.notice("沒有偵測到說話，沒有貼上（請檢查麥克風）")
+        return False
 
     # ---- 依目前的程式調整 ----
 
@@ -358,6 +411,8 @@ class Daemon:
         level = dbfs(audio)
         if level < self.cfg.audio.silence_dbfs:
             log.info("錄音音量 %.1f dBFS，視為沒講話，略過", level)
+            return
+        if not self._has_speech(audio, sr, duration):
             return
         t0 = time.monotonic()
         raw, asr_name = self._transcribe(audio, sr)
@@ -475,6 +530,115 @@ class Daemon:
         if self.dbus:
             self.dbus.notify_history()
         return result
+
+    # ---- 設定畫面（GNOME extension 的設定頁）----
+
+    def settings_json(self) -> str:
+        from .credentials import CredentialError, KeyringStore
+
+        try:
+            keys = KeyringStore().providers()
+        except CredentialError:
+            keys = None  # 鑰匙圈鎖住或讀不到
+        try:
+            _, llm_target = cloud.choose_refiner(self.cfg)
+        except (cloud.CloudError, ConfigError) as e:
+            llm_target = f"無法使用：{e}"
+        return json.dumps({
+            "values": settings.values(self.cfg),
+            "hotkeys": settings.HOTKEYS,
+            "restart_needed": self.restart_needed(),
+            "api_keys": keys,
+            "providers": {k: p.label for k, p in cloud.PRESETS.items()},
+            "llm_target": llm_target,
+            "config_path": str(self.config_path),
+            "apps_path": str(AppRules().path),
+            "dictionary_path": str(self._dictionary_path()),
+        }, ensure_ascii=False)
+
+    def restart_needed(self) -> list[str]:
+        current = settings.values(self.cfg)
+        return [k for k, s in settings.SETTINGS.items() if not s.live and current[k] != self._started_values[k]]
+
+    def set_setting(self, key: str, value_json: str) -> bool:
+        """改一項設定並寫進設定檔；回傳是否要重新啟動 danwen 才會生效。"""
+        value = settings.coerce(key, json.loads(value_json))
+        if settings.get(self.cfg, key) != value:
+            settings.write(self.config_path, key, value)
+            section, name = key.split(".")
+            setattr(getattr(self.cfg, section), name, value)
+            if settings.SETTINGS[key].live:
+                self._apply_live(key)
+            log.info("設定：%s = %s", key, value)
+        return bool(self.restart_needed())
+
+    def _apply_live(self, key: str) -> None:
+        cfg = self.cfg
+        if key.startswith("feedback."):
+            self.feedback = Feedback(cfg.feedback.sounds, cfg.feedback.notify_errors)
+        elif key == "audio.bluetooth_mic":
+            if self.bt_mic is not None:
+                self.bt_mic.close()
+            use_bt = cfg.audio.bluetooth_mic and cfg.audio.device is None
+            self.bt_mic = BluetoothMic(cfg.audio.bluetooth_restore_s, remote=lambda: self.dbus) if use_bt else None
+        elif key == "audio.bluetooth_restore_s" and self.bt_mic is not None:
+            self.bt_mic.restore_after_s = cfg.audio.bluetooth_restore_s
+        elif key == "audio.speech_check":
+            self.speech = SpeechDetector() if cfg.audio.speech_check else None
+        elif key == "output.app_rules":
+            self.app_rules = AppRules() if cfg.output.app_rules else None
+        # refine.*、long_recording.refine 每次使用時才讀，不必另外處理
+
+    def models_json(self) -> str:
+        return json.dumps(cloud.model_menu(self.cfg), ensure_ascii=False)
+
+    def set_model(self, provider: str, kind: str, model: str) -> None:
+        if provider == "ollama":
+            self.set_setting("refine.model", json.dumps(model))
+        else:
+            cloud.set_model(provider, kind, model)
+            log.info("模型：%s %s = %s", provider, kind, model)
+
+    def test_model(self, provider: str) -> str:
+        seconds, output = cloud.test_model(self.cfg, provider, self.post)
+        return json.dumps({"seconds": round(seconds, 2), "output": output}, ensure_ascii=False)
+
+    def _dictionary_path(self) -> Path:
+        configured = self.cfg.postprocess.replacements
+        return Path(configured).expanduser() if configured else paths.REPLACEMENTS_FILE
+
+    def dictionary_json(self) -> str:
+        return json.dumps(self.post.replacements.entries(), ensure_ascii=False)
+
+    def set_dictionary_entry(self, wrong: str, right: str) -> None:
+        """新增或修改一條詞條；right 為空字串＝刪除。"""
+        import shutil
+
+        from .postprocess import edit_replacements
+
+        if not wrong.strip():
+            raise ValueError("要填寫常錯的寫法")
+        path = self._dictionary_path()
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(paths.DATA_DIR / "replacements.yaml", path)
+        if self.post.replacements.path != path:  # 原本用的是內建字典：改用使用者的
+            self.post = PostProcessor(self.cfg.postprocess.opencc, path)
+        edit_replacements(path, wrong.strip(), right.strip() or None)
+
+    def dict_suggestions_json(self, use_llm: bool) -> str:
+        entries = list(reversed(self.history.entries())) if self.history else []
+        refiner = cloud.choose_refiner(self.cfg)[0] if use_llm else None
+        items = suggest.merge(suggest.collect(entries, refiner), self.post.replacements.entries())
+        by_id = {e.id: e for e in entries}
+        return json.dumps([{
+            "wrong": s.wrong, "right": s.right, "source": s.source, "two_way": s.two_way,
+            "entries": s.entries, "reason": s.reason,
+            "examples": [by_id[n].raw[:60] for n in s.entries[:2] if n in by_id],
+        } for s in items], ensure_ascii=False)
+
+    def ignore_suggestion(self, wrong: str, right: str, source: str) -> None:
+        suggest.ignore(suggest.Suggestion(wrong, right, source))
 
     def _post(self, command) -> None:
         if self._listener is None:
